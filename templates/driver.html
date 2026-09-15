@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fikisha - Driver</title>
+<style>
+body { font-family: sans-serif; background: #f5f5f5; padding: 10px; }
+.card { background: white; padding: 15px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px #ccc; }
+button { padding: 10px; margin: 5px; border: none; border-radius: 6px; color: white; font-weight: bold; }
+.pick { background: #2e7d32; }
+.drop { background: #1565c0; }
+.pick2 { background: #ff8f00; }
+.drop2 { background: #4e342e; }
+.status { font-weight: bold; color: #333; }
+</style>
+</head>
+<body>
+<h2>🚐 Fikisha Driver - Van UAA 123</h2>
+<p>Paid until: {{ paid_until }}</p>
+{% for kid in kids %}
+<div class="card">
+  <h3>{{ kid.name }} - {{ kid.stage }}</h3>
+  <p class="status">{{ kid.status }}</p>
+  <a href="/pick_home/{{ kid.id }}"><button class="pick">PICKED AT HOME</button></a>
+  <a href="/drop_school/{{ kid.id }}"><button class="drop">DROPPED AT SCHOOL</button></a><br>
+  <a href="/pick_school/{{ kid.id }}"><button class="pick2">PICKED AT SCHOOL</button></a>
+  <a href="/drop_home/{{ kid.id }}"><button class="drop2">DROPPED AT HOME</button></a>
+</div>
+{% endfor %}
+</body>
+</html>

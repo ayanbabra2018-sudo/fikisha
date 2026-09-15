@@ -1,0 +1,41 @@
+{
+  "schools": {
+    "BRIGHT123": {
+      "name": "Bright Angels",
+      "code": "BRIGHT123",
+      "director_phone": "256772527255",
+      "paid_until": "2026-09-29",
+      "vans": {
+        "UAA123": {
+          "plate": "UAA123",
+          "driver_name": "KATO RONALD",
+          "driver_phone": "256785433974"
+        }
+      },
+      "kids": {
+        "6E9D657B": {
+          "id": "6E9D657B",
+          "name": "okello peter",
+          "stage": "kireka",
+          "parent_phone": "25675637489",
+          "van_plate": "UAA123",
+          "status": "Picked HOME at 08:07 AM 15 Sep",
+          "times": {
+            "picked_home": "08:07 AM 15 Sep"
+          },
+          "absent": false
+        },
+        "4E103725": {
+          "id": "4E103725",
+          "name": "mwanguzi samuel",
+          "stage": "seeta",
+          "parent_phone": "256785433974",
+          "van_plate": "UAA123",
+          "status": "At Home",
+          "times": {},
+          "absent": false
+        }
+      }
+    }
+  }
+}

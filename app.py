@@ -30,9 +30,7 @@ button:hover{background:#001a4d;transform:scale(1.02)}
 .btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px} @media(max-width:700px){.grid{grid-template-columns:1fr}}
 .badge{padding:6px 12px;border-radius:20px;font-size:13px;font-weight:bold;background:#0D2A54;color:#FFC107}
-.bg-green{background:#FFF8E1}.bg-grey{background:#f0f0f0}
 a{color:#1565c0;font-weight:bold;text-decoration:none}
-a:hover{text-decoration:underline}
 </style>
 """
 
@@ -123,7 +121,13 @@ DRIVER_HTML = CSS + """
 <h2>🚐 Driver: {{van.driver_name}} — Van {{van.plate}} — {{school.name}}</h2>
 {% if locked %}<div class="card" style="background:#ffcccc;border:2px solid red"><h1>🔒 PAY TO UNLOCK — Expired {{school.paid_until}}</h1>Call Fikisha Admin</div>{% endif %}
 <p>Code: {{code}} | Date: {{today}} | Kids: {{kids|length}}</p>
-<button class="btn-red" onclick="sendTraffic()" style="padding:12px;font-size:16px;width:100%">🚨 TRAFFIC — 15 MINS LATE (Send to ALL parents)</button>
+
+<div class="card" style="border:2px solid #d32f2f; border-top:5px solid #d32f2f">
+<h3 style="color:#d32f2f">🚨 Send Custom Alert to ALL Parents</h3>
+<input id="trafficMsg" placeholder="Type reason... e.g. Tyre busted at Kireka, Accident at Bweyogerere, Fuel finished..." style="width:95%;padding:14px;border:2px solid #d32f2f">
+<br><br>
+<button class="btn-red" onclick="sendTraffic()" style="padding:14px;font-size:16px;width:100%">🚨 SEND ALERT TO ALL PARENTS</button>
+</div>
 <hr>
 <div class="grid">
 {% for kid_id, kid in kids.items() %}
@@ -148,7 +152,9 @@ function action(kid_id, act){
  fetch('/api/{{code}}/{{van.plate}}/action', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({kid_id: kid_id, action: act})}).then(()=>location.reload())
 }
 function sendTraffic(){
- fetch('/api/{{code}}/{{van.plate}}/traffic', {method:'POST'}).then(()=>alert('Traffic alert sent to all parents! ✅'))
+ let msg = document.getElementById('trafficMsg').value;
+ if(!msg){ alert('Please type reason first! Example: Tyre busted'); return; }
+ fetch('/api/{{code}}/{{van.plate}}/traffic', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: msg})}).then(()=>{ alert('Alert sent to all parents! ✅\\n'+msg); document.getElementById('trafficMsg').value=''; })
 }
 </script>
 """
@@ -197,9 +203,14 @@ def driver_action(code, plate):
 def traffic(code, plate):
     db = load_db()
     school = db['schools'][code]
+    data = request.get_json() or {}
+    custom_msg = data.get('message', '').strip()
+    if not custom_msg:
+        custom_msg = "Stuck in traffic ~15 mins late"
+    now = datetime.now().strftime("%I:%M %p %d %b")
     kids = [k for k in school['kids'].values() if k['van_plate']==plate.upper() and not k['absent']]
     for kid in kids:
-        whatsapp(kid['parent_phone'], f"Fikisha TRAFFIC: Van {plate} ({school['name']}) stuck in traffic near {kid['stage']}. ~15 mins late. Driver: {school['vans'][plate]['driver_name']} {school['vans'][plate]['driver_phone']}")
+        whatsapp(kid['parent_phone'], f"Fikisha ALERT [{now}] - Van {plate} ({school['name']}): {custom_msg}. Stage: {kid['stage']}. Driver: {school['vans'][plate]['driver_name']} {school['vans'][plate]['driver_phone']}")
     return jsonify({"sent": len(kids)})
 
 @app.route("/p/<kid_id>")

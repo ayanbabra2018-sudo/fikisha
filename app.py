@@ -1,5 +1,5 @@
 from flask import Flask, request, redirect, jsonify
-import json, os
+import json, os, requests
 from datetime import datetime, date, timedelta
 
 app = Flask(__name__)
@@ -15,8 +15,35 @@ def save_db(db):
     with open(DB_FILE, 'w') as f:
         json.dump(db, f, indent=2)
 
+# === REAL WHATSAPP - FIXED ===
 def whatsapp(to, msg):
-    print(f"\n=== WHATSAPP TO {to} ===\n{msg}\n========================\n")
+    token = os.environ.get("WHATSAPP_TOKEN")
+    phone_id = os.environ.get("WHATSAPP_PHONE_ID", "1327812003752192")
+
+    if not token:
+        print("!!! WHATSAPP_TOKEN MISSING IN RENDER!!!")
+        return False
+
+    # Clean number: 0793... -> 256793...
+    clean = str(to).replace("+","").replace(" ","").replace("-","").strip()
+    if clean.startswith("0"):
+        clean = "256" + clean[1:]
+
+    url = f"https://graph.facebook.com/v20.0/{phone_id}/messages"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": clean,
+        "type": "text",
+        "text": {"body": msg}
+    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=15)
+        print(f"WhatsApp to {clean}: {r.status_code} - {r.text}")
+        return r.status_code == 200
+    except Exception as e:
+        print(f"WhatsApp error: {e}")
+        return False
 
 def is_locked(school):
     try:
@@ -180,7 +207,7 @@ def add_kid(code):
     kid_id = str(uuid.uuid4())[:8].upper()
     db['schools'][code]['kids'][kid_id] = {"id": kid_id,"name": request.form['kid_name'],"stage": request.form['stage'],"parent_phone": request.form['parent_phone'],"van_plate": request.form['van_plate'].upper(),"status": "At Home 🏠 — waiting for van","times": {},"absent": False}
     save_db(db)
-    whatsapp(request.form['parent_phone'], f"Fikisha: {request.form['kid_name']} added. View: fikisha-18fx.onrender.com/p/{kid_id}")
+    whatsapp(request.form['parent_phone'], f"Fikisha: {request.form['kid_name']} added. View: https://fikisha-18fx.onrender.com/p/{kid_id}")
     return redirect(f"/admin/{code}")
 
 @app.route("/api/<code>/reset_all", methods=["POST"])
@@ -334,7 +361,6 @@ def send_report(code):
     whatsapp(school['director_phone'], f"REPORT {school['name']} {date.today()}")
     return f"Sent<br><a href='/admin/{code}'>Back</a>"
 
-if __name__ == "__main__":
-    import os
+if __name__ == "___main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

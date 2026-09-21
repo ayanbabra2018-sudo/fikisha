@@ -15,39 +15,60 @@ def save_db(db):
     with open(DB_FILE, 'w') as f:
         json.dump(db, f, indent=2)
 
-# === FIXED WHATSAPP FOR SCHOOL VAN - USES YOUR 5 NEW TEMPLATES ===
+# === FIXED WHATSAPP TEMPLATE ===
+def to_wa(p):
+    c = str(p).replace("+","").replace(" ","").replace("-","").strip()
+    if c.startswith("0"):
+        c = "256" + c[1:]
+    return c
+
 def whatsapp_template(to, template_name, params=[]):
     token = os.environ.get("WHATSAPP_TOKEN")
     phone_id = os.environ.get("WHATSAPP_PHONE_ID", "1327812003752192")
     if not token:
-        print("!!! WHATSAPP_TOKEN MISSING!!!")
+        print("!!! TOKEN MISSING!!!")
         return False
-    clean = str(to).replace("+","").replace(" ","").replace("-","").strip()
-    if clean.startswith("0"):
-        clean = "256" + clean[1:]
-    url = f"https://graph.facebook.com/v20.0/{phone_id}/messages"
+    clean = to_wa(to)
+    url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    comp = []
-    if params:
-        comp = [{"type":"body","parameters":[{"type":"text","text":str(p)} for p in params]}]
-    payload = {
+    body_params = [{"type": "text", "text": str(p)} for p in params]
+    data = {
         "messaging_product": "whatsapp",
         "to": clean,
         "type": "template",
-        "template": {"name": template_name, "language": {"code": "en_US"}, "components": comp}
+        "template": {
+            "name": template_name,
+            "language": {"code": "en_US"},
+            "components": [{"type": "body", "parameters": body_params}] if body_params else []
+        }
     }
     try:
-        r = requests.post(url, headers=headers, json=payload, timeout=15)
-        print(f"WhatsApp TEMPLATE {template_name} to {clean}: {r.status_code} - {r.text}")
+        r = requests.post(url, headers=headers, json=data, timeout=15)
+        print(f"WA TEMPLATE {template_name} to {clean}: {r.status_code} - {r.text}")
         return r.status_code == 200
     except Exception as e:
-        print(f"Template error: {e}")
+        print(f"WA Error: {e}")
         return False
 
+# keep old text for alerts inside 24h window
 def whatsapp(to, msg):
-    # Fallback for old plain text - now just logs, real sends use templates below
-    print(f"Legacy whatsapp() called: {msg} - use whatsapp_template instead")
-    return whatsapp_template(to, "hello_world")
+    token = os.environ.get("WHATSAPP_TOKEN")
+    phone_id = os.environ.get("WHATSAPP_PHONE_ID", "1327812003752192")
+    if not token: return False
+    clean = to_wa(to)
+    url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp","to": clean,"type": "text","text": {"body": msg}}
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=15)
+        print(f"WhatsApp TEXT to {clean}: {r.status_code} - {r.text}")
+        # If text fails (24h window closed), try template fallback
+        if r.status_code!= 200 and "24" in r.text:
+            return whatsapp_template(clean, "trip_started", [msg[:20]])
+        return r.status_code == 200
+    except Exception as e:
+        print(f"WA error {e}")
+        return False
 
 def is_locked(school):
     try:
@@ -72,7 +93,7 @@ h2{color:#0D2A54;border-bottom:3px solid #FFC107;padding-bottom:8px}
 h3{color:#0D2A54}
 .card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 4px 14px rgba(0,0,0,0.1);border-top:5px solid #FFC107}
 input,select{padding:11px;border-radius:10px;border:2px solid #FFC107;margin:6px;width:90%;font-size:15px}
-button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px;font-size:15px}
+button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px;font-size:15px;transition:0.2s}
 button:hover{transform:scale(1.03)}
 .btn-done{background:#0a7a2a!important;color:white!important}
 .btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}.btn-grey{background:#888;color:white}
@@ -211,8 +232,8 @@ def add_kid(code):
     kid_id = str(uuid.uuid4())[:8].upper()
     db['schools'][code]['kids'][kid_id] = {"id": kid_id,"name": request.form['kid_name'],"stage": request.form['stage'],"parent_phone": request.form['parent_phone'],"van_plate": request.form['van_plate'].upper(),"status": "At Home 🏠 — waiting for van","times": {},"absent": False}
     save_db(db)
-    # Use hello_world for welcome (always active)
-    whatsapp_template(request.form['parent_phone'], "hello_world")
+    # Use TEMPLATE for first contact
+    whatsapp_template(request.form['parent_phone'], "arrived_safe", [request.form['kid_name'], "Fikisha"])
     return redirect(f"/admin/{code}")
 
 @app.route("/api/<code>/reset_all", methods=["POST"])
@@ -307,19 +328,18 @@ def driver_action(code, plate):
     kid = db['schools'][code]['kids'][kid_id]
     now = datetime.now().strftime("%I:%M %p %d %b")
     short = datetime.now().strftime("%I:%M %p")
-
     if act == 'picked_home':
         kid['status']=f"On way to School 🚐 — picked at {short}"; kid['times']['picked_home']=now; kid['absent']=False
-        whatsapp_template(kid['parent_phone'], "picked_home", [kid['name'], short, plate])
+        whatsapp_template(kid['parent_phone'], "trip_started", [kid['name'], school['name']])
     elif act == 'dropped_school':
         kid['status']=f"At School 🏫 — arrived at {short}"; kid['times']['dropped_school']=now
-        whatsapp_template(kid['parent_phone'], "dropped_school", [kid['name'], short])
+        whatsapp_template(kid['parent_phone'], "arrived_safe", [kid['name'], school['name']])
     elif act == 'picked_school':
         kid['status']=f"On way Home 🏠 — left at {short}"; kid['times']['picked_school']=now
-        whatsapp_template(kid['parent_phone'], "picked_school", [kid['name'], short, plate])
+        whatsapp_template(kid['parent_phone'], "trip_started", [kid['name'], school['name']])
     elif act == 'dropped_home':
         kid['status']=f"Home Safe ✅ — {short}"; kid['times']['dropped_home']=now; kid['dropped_home_ts']=datetime.now().isoformat()
-        whatsapp_template(kid['parent_phone'], "dropped_home", [kid['name'], short])
+        whatsapp_template(kid['parent_phone'], "trip_completed", [kid['name']])
     elif act == 'absent':
         kid['status']="ABSENT Today 🚫"; kid['absent']=True
     elif act == 'present':
@@ -335,8 +355,7 @@ def traffic(code, plate):
         return jsonify({"locked": True}), 403
     custom_msg = (request.get_json() or {}).get('message','').strip() or "Traffic ~15 mins late"
     for kid in [k for k in school['kids'].values() if k['van_plate']==plate.upper() and not k['absent']]:
-        # NEW FIXED traffic_alert with 2 variables only
-        whatsapp_template(kid['parent_phone'], "traffic_alert", [plate, custom_msg])
+        whatsapp_template(kid['parent_phone'], "trip_started", [kid['name'], custom_msg])
     return jsonify({"sent": True})
 
 @app.route("/p/<kid_id>")
@@ -364,7 +383,7 @@ def report(code):
 def send_report(code):
     db = load_db(); school=db['schools'][code]
     if is_locked(school): return "Expired — Renew first"
-    whatsapp_template(school['director_phone'], "hello_world")
+    whatsapp_template(school['director_phone'], "monthly_report", [school['name'], str(date.today())])
     return f"Sent<br><a href='/admin/{code}'>Back</a>"
 
 if __name__ == "__main__":

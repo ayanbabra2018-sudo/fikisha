@@ -15,7 +15,6 @@ def save_db(db):
     with open(DB_FILE, 'w') as f:
         json.dump(db, f, indent=2)
 
-# === FIXED WHATSAPP TEMPLATE ===
 def to_wa(p):
     c = str(p).replace("+","").replace(" ","").replace("-","").strip()
     if c.startswith("0"):
@@ -45,15 +44,15 @@ def whatsapp_template(to, template_name, params=[]):
     try:
         r = requests.post(url, headers=headers, json=data, timeout=15)
         print(f"WA TEMPLATE {template_name} to {clean}: {r.status_code} - {r.text}")
-        return r.status_code == 200
+        return r.status_code == 200, r.text
     except Exception as e:
         print(f"WA Error: {e}")
-        return False
+        return False, str(e)
 
-def whatsapp(to, msg):
+def whatsapp_text(to, msg):
     token = os.environ.get("WHATSAPP_TOKEN")
     phone_id = os.environ.get("WHATSAPP_PHONE_ID", "1327812003752192")
-    if not token: return False
+    if not token: return False, "no token"
     clean = to_wa(to)
     url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -61,12 +60,15 @@ def whatsapp(to, msg):
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=15)
         print(f"WhatsApp TEXT to {clean}: {r.status_code} - {r.text}")
-        if r.status_code!= 200 and "24" in r.text:
-            return whatsapp_template(clean, "traffic_alert", [msg[:100]])
-        return r.status_code == 200
+        return r.status_code == 200, r.text
     except Exception as e:
-        print(f"WA error {e}")
-        return False
+        return False, str(e)
+
+def whatsapp(to, msg):
+    ok, resp = whatsapp_text(to, msg)
+    if not ok and "24" in resp:
+        return whatsapp_template(to, "traffic_alert", [msg[:100]])
+    return ok
 
 def is_locked(school):
     try:
@@ -84,51 +86,16 @@ def maybe_auto_reset(kid):
         except: pass
     return False
 
-CSS = """
-<style>
-body{font-family:system-ui,Arial;background:#FFF8E1;margin:0;padding:15px;color:#1a1a1a}
-h2{color:#0D2A54;border-bottom:3px solid #FFC107;padding-bottom:8px}
-h3{color:#0D2A54}
-.card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 4px 14px rgba(0,0,0,0.1);border-top:5px solid #FFC107}
-input,select{padding:11px;border-radius:10px;border:2px solid #FFC107;margin:6px;width:90%;font-size:15px}
-button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px;font-size:15px;transition:0.2s}
-button:hover{transform:scale(1.03)}
-.btn-done{background:#0a7a2a!important;color:white!important}
-.btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}.btn-grey{background:#888;color:white}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px} @media(max-width:700px){.grid{grid-template-columns:1fr}}
-.badge{padding:6px 12px;border-radius:20px;font-size:13px;font-weight:bold;background:#0D2A54;color:#FFC107}
-.progress{height:10px;background:#eee;border-radius:10px;overflow:hidden;margin:10px 0}
-.progress-fill{height:100%;background:linear-gradient(90deg,#0a7a2a,#FFC107);transition:width 0.5s}
-a{color:#1565c0;font-weight:bold;text-decoration:none}
-.small{font-size:12px;color:#666}
-</style>
-"""
+CSS = """<style>body{font-family:system-ui,Arial;background:#FFF8E1;margin:0;padding:15px;color:#1a1a1a}h2{color:#0D2A54;border-bottom:3px solid #FFC107;padding-bottom:8px}h3{color:#0D2A54}.card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 4px 14px rgba(0,0,0,0.1);border-top:5px solid #FFC107}input,select{padding:11px;border-radius:10px;border:2px solid #FFC107;margin:6px;width:90%;font-size:15px}button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px;font-size:15px}button:hover{transform:scale(1.03)}.btn-done{background:#0a7a2a!important;color:white!important}.btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}.btn-grey{background:#888;color:white}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px} @media(max-width:700px){.grid{grid-template-columns:1fr}}.badge{padding:6px 12px;border-radius:20px;font-size:13px;font-weight:bold;background:#0D2A54;color:#FFC107}.progress{height:10px;background:#eee;border-radius:10px;overflow:hidden;margin:10px 0}.progress-fill{height:100%;background:linear-gradient(90deg,#0a7a2a,#FFC107)}a{color:#1565c0;font-weight:bold;text-decoration:none}.small{font-size:12px;color:#666}</style>"""
 
 @app.route("/")
 def home():
     db = load_db()
     html = CSS + "<h2>🚐 FIKISHA — Super Admin (YOU)</h2>"
-    html += """
-    <div class="card"><h3>Create New School</h3>
-    <form method="post" action="/create_school">
-     <input name="school_name" placeholder="Bright Angels" required>
-     <input name="code" placeholder="Code BRIGHT123" required>
-     <input name="director" placeholder="Director WhatsApp 2567..." required>
-     <input name="paid_until" type="date" required>
-     <button>Add School +</button>
-    </form></div><hr>
-    """
+    html += """<div class="card"><h3>Create New School</h3><form method="post" action="/create_school"><input name="school_name" placeholder="Bright Angels" required><input name="code" placeholder="Code BRIGHT123" required><input name="director" placeholder="Director WhatsApp 2567..." required><input name="paid_until" type="date" required><button>Add School +</button></form></div><hr>"""
     for code, s in db.get("schools", {}).items():
         lock = "🔒 EXPIRED" if is_locked(s) else "✅ Active"
-        html += f"""
-        <div class='card'><b>🏫 {s['name']}</b> ({code}) — {lock} — Paid: {s['paid_until']} | Director: {s['director_phone']}<br>
-        <form method='post' action='/super/update_paid/{code}' style='display:inline'>
-          <input type='date' name='paid_until' value='{s['paid_until']}' required>
-          <button style='padding:6px 12px;font-size:13px'>Update Paid Date</button>
-        </form>
-        <a href='/admin/{code}'>⚙️ Manage</a> | <a href='/report/{code}'>📊 Report</a> |
-        <a href='/super/delete_school/{code}' onclick="return confirm('Delete school {code}??')" style='color:red'>🗑️ Delete School</a><br>
-        """
+        html += f"""<div class='card'><b>🏫 {s['name']}</b> ({code}) — {lock} — Paid: {s['paid_until']} | Director: {s['director_phone']}<br><form method='post' action='/super/update_paid/{code}' style='display:inline'><input type='date' name='paid_until' value='{s['paid_until']}' required><button style='padding:6px 12px;font-size:13px'>Update Paid Date</button></form><a href='/admin/{code}'>⚙️ Manage</a> | <a href='/report/{code}'>📊 Report</a> | <a href='/super/delete_school/{code}' onclick="return confirm('Delete school {code}??')" style='color:red'>🗑️ Delete School</a><br>"""
         for vp, van in s.get('vans', {}).items():
             html += f"🚐 <b>{vp}</b> - {van['driver_name']} - <a href='/driver/{code}/{vp}'>🔗 Driver Page</a><br>"
         html += "</div>"
@@ -157,41 +124,7 @@ def delete_school(code):
     save_db(db)
     return redirect("/")
 
-ADMIN_HTML = CSS + """
-<h2>🏫 {{school.name}} Admin ({{code}}) — {% if locked %}🔒 EXPIRED {{school.paid_until}}{% else %}✅ Paid until {{school.paid_until}}{% endif %}</h2>
-<a href="/">⬅️ Super Admin</a> | <a href="/report/{{code}}">📊 Report</a>
-<div class="card" style="border-top:5px solid #0a7a2a">
-<h3>🔄 Daily Control</h3>
-<form method="post" action="/api/{{code}}/reset_all" onsubmit="return confirm('Reset ALL for new day?')">
-<button style="background:#0a7a2a;width:100%;padding:16px">🔄 RESET ALL BUTTONS FOR TOMORROW</button>
-</form>
-</div>
-<div class="card"><h3>🚐 Add Van</h3>
-<form method="post" action="/admin/{{code}}/add_van">
- <input name="plate" placeholder="Plate UAA123" required>
- <input name="driver_name" placeholder="Driver Name" required>
- <input name="driver_phone" placeholder="Driver Phone 2567..." required>
- <button>Add Van</button>
-</form></div>
-<div class="card"><h3>👶 Add Kid to Van</h3>
-<form method="post" action="/admin/{{code}}/add_kid">
- <input name="kid_name" placeholder="Kid Name" required>
- <input name="stage" placeholder="Stage Kisaasi" required>
- <input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>
- Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select>
- <button>Add Kid</button>
-</form></div>
-<hr><h3>Vans & Kids (Can Delete)</h3>
-{% for vp, van in school.vans.items() %}
-<div class="card"><b>🚐 {{vp}} - {{van.driver_name}} ({{van.driver_phone}})</b> - <a href="/driver/{{code}}/{{vp}}">🔗 Driver Page</a>
-<a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}?')" style="color:red;float:right">🗑️ Delete Van</a><br>
-{% for kid_id, kid in school.kids.items() if kid.van_plate==vp %}
-&nbsp;&nbsp; • {{kid.name}} ({{kid.stage}}) — {{kid.status}} — {{kid.parent_phone}} — <a href="/p/{{kid_id}}">Parent View</a>
-<a href="/admin/{{code}}/delete_kid/{{kid_id}}" onclick="return confirm('Delete {{kid.name}}?')" style="color:red">❌ Delete Kid</a><br>
-{% endfor %}
-</div>
-{% endfor %}
-"""
+ADMIN_HTML = CSS + """<h2>🏫 {{school.name}} Admin ({{code}}) — {% if locked %}🔒 EXPIRED {{school.paid_until}}{% else %}✅ Paid until {{school.paid_until}}{% endif %}</h2><a href="/">⬅️ Super Admin</a> | <a href="/report/{{code}}">📊 Report</a><div class="card" style="border-top:5px solid #0a7a2a"><h3>🔄 Daily Control</h3><form method="post" action="/api/{{code}}/reset_all" onsubmit="return confirm('Reset ALL for new day?')"><button style="background:#0a7a2a;width:100%;padding:16px">🔄 RESET ALL BUTTONS FOR TOMORROW</button></form></div><div class="card"><h3>🚐 Add Van</h3><form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form></div><div class="card"><h3>👶 Add Kid to Van</h3><form method="post" action="/admin/{{code}}/add_kid"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage Kisaasi" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form></div><hr><h3>Vans & Kids (Can Delete)</h3>{% for vp, van in school.vans.items() %}<div class="card"><b>🚐 {{vp}} - {{van.driver_name}} ({{van.driver_phone}})</b> - <a href="/driver/{{code}}/{{vp}}">🔗 Driver Page</a><a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}?')" style="color:red;float:right">🗑️ Delete Van</a><br>{% for kid_id, kid in school.kids.items() if kid.van_plate==vp %}&nbsp;&nbsp; • {{kid.name}} ({{kid.stage}}) — {{kid.status}} — {{kid.parent_phone}} — <a href="/p/{{kid_id}}">Parent View</a><a href="/admin/{{code}}/delete_kid/{{kid_id}}" onclick="return confirm('Delete {{kid.name}}?')" style="color:red">❌ Delete Kid</a><br>{% endfor %}</div>{% endfor %}"""
 
 @app.route("/admin/<code>")
 def admin(code):
@@ -241,54 +174,7 @@ def reset_all(code):
     save_db(db)
     return redirect(f"/admin/{code}")
 
-DRIVER_HTML = CSS + """
-<h2>🚐 Driver: {{van.driver_name}} — Van {{van.plate}} — {{school.name}}</h2>
-{% if locked %}
-<div class="card" style="background:#ffcccc;border:3px solid red;text-align:center">
-<h1>🔒 PAY TO UNLOCK</h1><p>Expired {{school.paid_until}} — Call Fikisha Admin</p>
-</div>
-{% endif %}
-<p>Code: {{code}} | {{today}} | {{kids|length}} kids</p>
-{% if not locked %}
-<div class="card" style="border:2px solid #d32f2f;border-top:5px solid #d32f2f">
-<h3 style="color:#d32f2f">🚨 Custom Alert to ALL Parents</h3>
-<input id="trafficMsg" placeholder="Tyre busted, accident, fuel..." style="width:95%;padding:14px;border:2px solid #d32f2f">
-<br><br>
-<button class="btn-red" onclick="sendTraffic()" style="width:100%;padding:14px">🚨 SEND ALERT</button>
-</div><hr>
-{% endif %}
-<div class="grid">
-{% for kid_id, kid in kids.items() %}
-<div class="card" style="border-left:6px solid {{'grey' if kid.absent else '#FFC107'}}; background: {{'#f0f0f0' if kid.absent else 'white'}}">
-<b style="font-size:18px">{{kid.name}}</b> — {{kid.stage}}<br>
-Parent: {{kid.parent_phone}} — <a href="/p/{{kid.id}}" target="_blank">👁️ View</a><br>
-Status: <span class="badge">{{kid.status}}</span>
-<div class="progress"><div class="progress-fill" style="width: {{kid.progress}}%"></div></div>
-<small>Times: {{kid.times}}</small><br><br>
-{% if not locked %}
-<button onclick="action('{{kid.id}}','picked_home')" class="{{'btn-done' if 'picked_home' in kid.times else ''}}">{{ '✅ PICKED HOME' if 'picked_home' in kid.times else '🔲 PICKED HOME' }}</button>
-<button onclick="action('{{kid.id}}','dropped_school')" class="{{'btn-done' if 'dropped_school' in kid.times else ''}}">{{ '✅ DROPPED SCHOOL' if 'dropped_school' in kid.times else '🏫 DROPPED SCHOOL' }}</button>
-<button onclick="action('{{kid.id}}','picked_school')" class="{{'btn-done' if 'picked_school' in kid.times else ''}}">{{ '✅ PICKED SCHOOL' if 'picked_school' in kid.times else '🏫 PICKED SCHOOL' }}</button>
-<button onclick="action('{{kid.id}}','dropped_home')" class="{{'btn-done' if 'dropped_home' in kid.times else 'btn-blue'}}">{{ '✅ DROPPED HOME' if 'dropped_home' in kid.times else '🏠 DROPPED HOME' }}</button><br>
-<button class="btn-orange" onclick="action('{{kid.id}}','absent')">🚫 ABSENT</button>
-<button class="btn-grey" onclick="action('{{kid.id}}','present')">↩️ BACK</button>
-{% endif %}
-</div>
-{% endfor %}
-</div>
-<script>
-function action(kid_id, act){
- fetch('/api/{{code}}/{{van.plate}}/action', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({kid_id: kid_id, action: act})})
-.then(r=>r.json()).then(j=>{ if(j.locked){ alert('🔒 Expired'); } location.reload(); })
-}
-function sendTraffic(){
- let msg = document.getElementById('trafficMsg').value;
- if(!msg){ alert('Type reason!'); return; }
- fetch('/api/{{code}}/{{van.plate}}/traffic', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: msg})})
-.then(r=>r.json()).then(j=>{ if(j.locked){ alert('🔒 Expired'); return;} alert('Sent! ✅'); document.getElementById('trafficMsg').value=''; })
-}
-</script>
-"""
+DRIVER_HTML = CSS + """<h2>🚐 Driver: {{van.driver_name}} — Van {{van.plate}} — {{school.name}}</h2>{% if locked %}<div class="card" style="background:#ffcccc;border:3px solid red;text-align:center"><h1>🔒 PAY TO UNLOCK</h1><p>Expired {{school.paid_until}} — Call Fikisha Admin</p></div>{% endif %}<p>Code: {{code}} | {{today}} | {{kids|length}} kids</p>{% if not locked %}<div class="card" style="border:2px solid #d32f2f;border-top:5px solid #d32f2f"><h3 style="color:#d32f2f">🚨 Custom Alert to ALL Parents</h3><input id="trafficMsg" placeholder="Tyre busted, accident, fuel..." style="width:95%;padding:14px;border:2px solid #d32f2f"><br><br><button class="btn-red" onclick="sendTraffic()" style="width:100%;padding:14px">🚨 SEND ALERT</button></div><hr>{% endif %}<div class="grid">{% for kid_id, kid in kids.items() %}<div class="card" style="border-left:6px solid {{'grey' if kid.absent else '#FFC107'}}; background: {{'#f0f0f0' if kid.absent else 'white'}}"><b style="font-size:18px">{{kid.name}}</b> — {{kid.stage}}<br>Parent: {{kid.parent_phone}} — <a href="/p/{{kid.id}}" target="_blank">👁️ View</a><br>Status: <span class="badge">{{kid.status}}</span><div class="progress"><div class="progress-fill" style="width: {{kid.progress}}%"></div></div><small>Times: {{kid.times}}</small><br><br>{% if not locked %}<button onclick="action('{{kid.id}}','picked_home')" class="{{'btn-done' if 'picked_home' in kid.times else ''}}">{{ '✅ PICKED HOME' if 'picked_home' in kid.times else '🔲 PICKED HOME' }}</button><button onclick="action('{{kid.id}}','dropped_school')" class="{{'btn-done' if 'dropped_school' in kid.times else ''}}">{{ '✅ DROPPED SCHOOL' if 'dropped_school' in kid.times else '🏫 DROPPED SCHOOL' }}</button><button onclick="action('{{kid.id}}','picked_school')" class="{{'btn-done' if 'picked_school' in kid.times else ''}}">{{ '✅ PICKED SCHOOL' if 'picked_school' in kid.times else '🏫 PICKED SCHOOL' }}</button><button onclick="action('{{kid.id}}','dropped_home')" class="{{'btn-done' if 'dropped_home' in kid.times else 'btn-blue'}}">{{ '✅ DROPPED HOME' if 'dropped_home' in kid.times else '🏠 DROPPED HOME' }}</button><br><button class="btn-orange" onclick="action('{{kid.id}}','absent')">🚫 ABSENT</button><button class="btn-grey" onclick="action('{{kid.id}}','present')">↩️ BACK</button>{% endif %}</div>{% endfor %}</div><script>function action(kid_id, act){fetch('/api/{{code}}/{{van.plate}}/action', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({kid_id: kid_id, action: act})}).then(r=>r.json()).then(j=>{ if(j.locked){ alert('🔒 Expired'); } location.reload(); })}function sendTraffic(){let msg = document.getElementById('trafficMsg').value; if(!msg){ alert('Type reason!'); return; }fetch('/api/{{code}}/{{van.plate}}/traffic', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: msg})}).then(r=>r.json()).then(j=>{ if(j.locked){ alert('🔒 Expired'); return;} alert('Sent! ✅'); document.getElementById('trafficMsg').value=''; })}</script>"""
 
 @app.route("/driver/<code>/<plate>")
 def driver_page(code, plate):
@@ -382,10 +268,21 @@ def send_report(code):
     whatsapp_template(school['director_phone'], "traffic_alert", [f"Report {school['name']} {date.today()}"])
     return f"Sent<br><a href='/admin/{code}'>Back</a>"
 
+# ===== NEW FIXED TEST ROUTES =====
 @app.route("/test_wa/<phone>")
 def test_wa(phone):
-    ok = whatsapp_template(phone, "picked_home", ["Test Kid"])
-    return f"Tested picked_home to {phone} -> {ok} <br> Check Render Logs for Meta response (should be 200)"
+    # Test with hello_world first (always approved)
+    ok, resp = whatsapp_template(phone, "hello_world", [])
+    if ok:
+        return f"✅ hello_world works to {phone} -> {resp} <br> YOUR TOKEN IS GOOD! Now wait for your 5 templates to be Approved"
+    # Try picked_home
+    ok2, resp2 = whatsapp_template(phone, "picked_home", ["Test Kid"])
+    return f"hello_world: {ok} - {resp} <br> picked_home: {ok2} - {resp2} <br> If 'In review' - wait 10-30 mins for Meta approval"
+
+@app.route("/test_wa_text/<phone>")
+def test_wa_text(phone):
+    ok, resp = whatsapp_text(phone, "Fikisha test message 🚐 - your WhatsApp is working!")
+    return f"Text to {phone}: {ok} - {resp} <br> NOTE: Text only works if you messaged Fikisha number in last 24h"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

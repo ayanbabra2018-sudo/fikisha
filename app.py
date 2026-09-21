@@ -50,7 +50,6 @@ def whatsapp_template(to, template_name, params=[]):
         print(f"WA Error: {e}")
         return False
 
-# keep old text for alerts inside 24h window
 def whatsapp(to, msg):
     token = os.environ.get("WHATSAPP_TOKEN")
     phone_id = os.environ.get("WHATSAPP_PHONE_ID", "1327812003752192")
@@ -62,9 +61,8 @@ def whatsapp(to, msg):
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=15)
         print(f"WhatsApp TEXT to {clean}: {r.status_code} - {r.text}")
-        # If text fails (24h window closed), try template fallback
         if r.status_code!= 200 and "24" in r.text:
-            return whatsapp_template(clean, "trip_started", [msg[:20]])
+            return whatsapp_template(clean, "traffic_alert", [msg[:100]])
         return r.status_code == 200
     except Exception as e:
         print(f"WA error {e}")
@@ -186,7 +184,7 @@ ADMIN_HTML = CSS + """
 <hr><h3>Vans & Kids (Can Delete)</h3>
 {% for vp, van in school.vans.items() %}
 <div class="card"><b>🚐 {{vp}} - {{van.driver_name}} ({{van.driver_phone}})</b> - <a href="/driver/{{code}}/{{vp}}">🔗 Driver Page</a>
-<a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}? All kids in it must be moved!')" style="color:red;float:right">🗑️ Delete Van</a><br>
+<a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}?')" style="color:red;float:right">🗑️ Delete Van</a><br>
 {% for kid_id, kid in school.kids.items() if kid.van_plate==vp %}
 &nbsp;&nbsp; • {{kid.name}} ({{kid.stage}}) — {{kid.status}} — {{kid.parent_phone}} — <a href="/p/{{kid_id}}">Parent View</a>
 <a href="/admin/{{code}}/delete_kid/{{kid_id}}" onclick="return confirm('Delete {{kid.name}}?')" style="color:red">❌ Delete Kid</a><br>
@@ -232,8 +230,7 @@ def add_kid(code):
     kid_id = str(uuid.uuid4())[:8].upper()
     db['schools'][code]['kids'][kid_id] = {"id": kid_id,"name": request.form['kid_name'],"stage": request.form['stage'],"parent_phone": request.form['parent_phone'],"van_plate": request.form['van_plate'].upper(),"status": "At Home 🏠 — waiting for van","times": {},"absent": False}
     save_db(db)
-    # Use TEMPLATE for first contact
-    whatsapp_template(request.form['parent_phone'], "arrived_safe", [request.form['kid_name'], "Fikisha"])
+    whatsapp_template(request.form['parent_phone'], "picked_home", [request.form['kid_name']])
     return redirect(f"/admin/{code}")
 
 @app.route("/api/<code>/reset_all", methods=["POST"])
@@ -248,11 +245,10 @@ DRIVER_HTML = CSS + """
 <h2>🚐 Driver: {{van.driver_name}} — Van {{van.plate}} — {{school.name}}</h2>
 {% if locked %}
 <div class="card" style="background:#ffcccc;border:3px solid red;text-align:center">
-<h1>🔒 PAY TO UNLOCK</h1><p>Expired {{school.paid_until}} — Call Fikisha Admin: Super Admin</p>
-<p>All buttons disabled.</p>
+<h1>🔒 PAY TO UNLOCK</h1><p>Expired {{school.paid_until}} — Call Fikisha Admin</p>
 </div>
 {% endif %}
-<p>Code: {{code}} | {{today}} | {{kids|length}} kids | <span class="small">Auto-reset 2hrs after Home Safe</span></p>
+<p>Code: {{code}} | {{today}} | {{kids|length}} kids</p>
 {% if not locked %}
 <div class="card" style="border:2px solid #d32f2f;border-top:5px solid #d32f2f">
 <h3 style="color:#d32f2f">🚨 Custom Alert to ALL Parents</h3>
@@ -283,7 +279,7 @@ Status: <span class="badge">{{kid.status}}</span>
 <script>
 function action(kid_id, act){
  fetch('/api/{{code}}/{{van.plate}}/action', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({kid_id: kid_id, action: act})})
-.then(r=>r.json()).then(j=>{ if(j.locked){ alert('🔒 School subscription expired! Call Super Admin.'); } location.reload(); })
+.then(r=>r.json()).then(j=>{ if(j.locked){ alert('🔒 Expired'); } location.reload(); })
 }
 function sendTraffic(){
  let msg = document.getElementById('trafficMsg').value;
@@ -330,16 +326,16 @@ def driver_action(code, plate):
     short = datetime.now().strftime("%I:%M %p")
     if act == 'picked_home':
         kid['status']=f"On way to School 🚐 — picked at {short}"; kid['times']['picked_home']=now; kid['absent']=False
-        whatsapp_template(kid['parent_phone'], "trip_started", [kid['name'], school['name']])
+        whatsapp_template(kid['parent_phone'], "picked_home", [kid['name']])
     elif act == 'dropped_school':
         kid['status']=f"At School 🏫 — arrived at {short}"; kid['times']['dropped_school']=now
-        whatsapp_template(kid['parent_phone'], "arrived_safe", [kid['name'], school['name']])
+        whatsapp_template(kid['parent_phone'], "dropped_school", [kid['name']])
     elif act == 'picked_school':
         kid['status']=f"On way Home 🏠 — left at {short}"; kid['times']['picked_school']=now
-        whatsapp_template(kid['parent_phone'], "trip_started", [kid['name'], school['name']])
+        whatsapp_template(kid['parent_phone'], "picked_school", [kid['name']])
     elif act == 'dropped_home':
         kid['status']=f"Home Safe ✅ — {short}"; kid['times']['dropped_home']=now; kid['dropped_home_ts']=datetime.now().isoformat()
-        whatsapp_template(kid['parent_phone'], "trip_completed", [kid['name']])
+        whatsapp_template(kid['parent_phone'], "dropped_home", [kid['name']])
     elif act == 'absent':
         kid['status']="ABSENT Today 🚫"; kid['absent']=True
     elif act == 'present':
@@ -355,7 +351,7 @@ def traffic(code, plate):
         return jsonify({"locked": True}), 403
     custom_msg = (request.get_json() or {}).get('message','').strip() or "Traffic ~15 mins late"
     for kid in [k for k in school['kids'].values() if k['van_plate']==plate.upper() and not k['absent']]:
-        whatsapp_template(kid['parent_phone'], "trip_started", [kid['name'], custom_msg])
+        whatsapp_template(kid['parent_phone'], "traffic_alert", [custom_msg])
     return jsonify({"sent": True})
 
 @app.route("/p/<kid_id>")
@@ -364,7 +360,7 @@ def parent_view(kid_id):
     for code, school in db['schools'].items():
         if kid_id in school['kids']:
             if is_locked(school):
-                return CSS + "<div class='card' style='background:#ffcccc'><h2>🔒 School Subscription Expired</h2>Contact school admin.</div>"
+                return CSS + "<div class='card' style='background:#ffcccc'><h2>🔒 Expired</h2></div>"
             kid = school['kids'][kid_id]
             van = school['vans'][kid['van_plate']]
             timeline = "<br>".join([f"• {k}: {v}" for k,v in kid['times'].items()]) or "Waiting..."
@@ -382,9 +378,14 @@ def report(code):
 @app.route("/api/<code>/send_report", methods=["POST"])
 def send_report(code):
     db = load_db(); school=db['schools'][code]
-    if is_locked(school): return "Expired — Renew first"
-    whatsapp_template(school['director_phone'], "monthly_report", [school['name'], str(date.today())])
+    if is_locked(school): return "Expired"
+    whatsapp_template(school['director_phone'], "traffic_alert", [f"Report {school['name']} {date.today()}"])
     return f"Sent<br><a href='/admin/{code}'>Back</a>"
+
+@app.route("/test_wa/<phone>")
+def test_wa(phone):
+    ok = whatsapp_template(phone, "picked_home", ["Test Kid"])
+    return f"Tested picked_home to {phone} -> {ok} <br> Check Render Logs for Meta response (should be 200)"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

@@ -367,6 +367,6 @@ def send_report(code):
     whatsapp_template(school['director_phone'], "hello_world")
     return f"Sent<br><a href='/admin/{code}'>Back</a>"
 
-if _name_ == "__main__":
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

@@ -147,8 +147,8 @@ def home():
     html = CSS + f"<h2>FIKISHA - Super Admin (Kampala: {current_time_str()}) | {'Supabase ✅' if SUPABASE_URL else 'Local'}</h2>"
     html += """<div class="card"><h3>Create New School</h3><form method="post" action="/create_school"><input name="school_name" placeholder="Bright Angels" required><input name="code" placeholder="Code BRIGHT123" required><input name="director" placeholder="Director WhatsApp 2567..." required><input name="paid_until" type="date" required><button>Add School +</button></form></div><hr>"""
     for code, s in db.get("schools", {}).items():
-        lock = "EXPIRED" if is_locked(s) else "Active"
-        html += f"""<div class='card'><b>{s['name']}</b> ({code}) - {lock} - Paid: {s.get('paid_until','?')}<br><form method='post' action='/super/update_paid/{code}' style='display:inline'><input type='date' name='paid_until' value='{s.get('paid_until','')}' required><button style='padding:6px 12px;font-size:13px'>Update Paid</button></form> <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Report</a> | <a href='/super/delete_school/{code}' onclick="return confirm('DELETE school {code}? This will block driver & admin forever!')" style='color:red'>Delete School ❌</a><br><br><button onclick="shareAdmin('{code}','{s['name']}','{s.get('director_phone','')}')" class="btn-blue">📲 Share Admin Link</button><br>"""
+        lock = "🔴 EXPIRED" if is_locked(s) else "🟢 Active"
+        html += f"""<div class='card' style="{'border:3px solid red' if is_locked(s) else ''}"><b>{s['name']}</b> ({code}) - {lock} - Paid: {s.get('paid_until','?')}<br><form method='post' action='/super/update_paid/{code}' style='display:inline'><input type='date' name='paid_until' value='{s.get('paid_until','')}' required><button style='padding:6px 12px;font-size:13px'>Update Paid ✅ Unlock</button></form> <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Report</a> | <a href='/super/delete_school/{code}' onclick="return confirm('DELETE {code}? Driver & Admin blocked forever! Data will be lost!')" style='color:red'>Delete School ❌</a><br><br><button onclick="shareAdmin('{code}','{s['name']}','{s.get('director_phone','')}')" class="btn-blue">📲 Share Admin Link</button><br>"""
         for vp, van in s.get('vans', {}).items(): html += f"Van <b>{vp}</b> - {van.get('driver_name','')} - <a href='/driver/{code}/{vp}'>Driver Page</a><br>"
         html += "</div>"
     html += """<script>function shareAdmin(code,name,phone){let link=window.location.origin+"/admin/"+code;let msg="FIKISHA Admin link for "+name+" ("+code+"): "+link;let clean=phone.replace(/[^0-9]/g,'');window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");}</script>"""
@@ -164,7 +164,9 @@ def create_school():
 @app.route("/super/update_paid/<code>", methods=["POST"])
 def update_paid(code):
     db = load_db(); code = normalize_code(code)
-    if code in db['schools']: db['schools'][code]['paid_until'] = request.form.get('paid_until', str(date.today())); save_db(db)
+    if code in db['schools']:
+        db['schools'][code]['paid_until'] = request.form.get('paid_until', str(date.today()))
+        save_db(db)
     return redirect("/")
 
 @app.route("/super/delete_school/<code>")
@@ -174,24 +176,25 @@ def delete_school(code):
     save_db(db)
     return redirect("/")
 
-ADMIN_HTML = CSS + """<h2>{{school.name}} Admin ({{code}})</h2><p>Kampala: {{kampala_time}} | {{db_file}}</p><a href="/report/{{code}}">Daily Report</a> | <a href="/">Super Admin</a><div class="card"><h3>Daily Control</h3><form method="post" action="/api/{{code}}/reset_all"><button style="background:#0a7a2a;width:100%">RESET ALL FOR TOMORROW</button></form></div><div class="card"><h3>Add Van</h3><form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form></div><div class="card"><h3>Add Kid to Van</h3>{% if school.vans|length==0 %}<p style="color:red">Add a Van first!</p>{% else %}<form method="post" action="/admin/{{code}}/add_kid"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form>{% endif %}</div><hr><h3>Vans & Kids ({{total_kids}})</h3>{% for vp, van in school.vans.items() %}<div class="card"><b>{{vp}} - {{van.driver_name}}</b> - {{van.driver_phone}} - <a href="/driver/{{code}}/{{vp}}">Driver Page</a> | <a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}?')" style="color:red">Delete Van ❌</a><br><br>{% for kid_id, kid in school.kids.items() if kid.van_plate==vp %}<div style="margin:6px 0;padding:8px;background:#FFF8E1;border-radius:8px;display:flex;justify-content:space-between;align-items:center"><span>👦 {{kid.name}} ({{kid.stage}}) - {{kid.status[:25]}}</span><a href="/admin/{{code}}/delete_kid/{{kid.id}}" onclick="return confirm('Delete {{kid.name}}?')" style="color:red;font-size:12px;font-weight:bold">❌ Delete Kid</a></div>{% endfor %}</div>{% endfor %}"""
+ADMIN_HTML = CSS + """{% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1><p>School locked on {{school.paid_until}}. Today is {{today}}.</p><p>Driver & School Admin CANNOT use app. Contact Super Admin to extend.</p><p>Data SAFE: {{total_kids}} kids, {{school.vans|length}} vans kept - not deleted.</p></div>{% endif %}<h2>{{school.name}} Admin ({{code}}) - {% if locked %}<span style="color:red">EXPIRED - Paid until {{school.paid_until}}</span>{% else %}Active until {{school.paid_until}}{% endif %}</h2><p>Kampala: {{kampala_time}} | {{db_file}}</p><a href="/report/{{code}}">Report</a> | <a href="/">Super Admin</a><div class="card"><h3>Daily Control</h3>{% if locked %}<button disabled style="background:#ccc;width:100%">🔒 Locked - Pay to Unlock</button>{% else %}<form method="post" action="/api/{{code}}/reset_all"><button style="background:#0a7a2a;width:100%">RESET ALL FOR TOMORROW</button></form>{% endif %}</div><div class="card"><h3>Add Van</h3>{% if locked %}<p style="color:red">🔒 Locked - Payment expired</p>{% else %}<form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form>{% endif %}</div><div class="card"><h3>Add Kid to Van</h3>{% if locked %}<p style="color:red">🔒 Locked - Payment expired</p>{% elif school.vans|length==0 %}<p style="color:red">Add a Van first!</p>{% else %}<form method="post" action="/admin/{{code}}/add_kid"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form>{% endif %}</div><hr><h3>Vans & Kids ({{total_kids}}) - Data Safe ✅</h3>{% for vp, van in school.vans.items() %}<div class="card"><b>{{vp}} - {{van.driver_name}}</b> - {{van.driver_phone}} - <a href="/driver/{{code}}/{{vp}}">Driver Page</a> | {% if not locked %}<a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}} and its kids?')" style="color:red">Delete Van ❌</a>{% else %}<span style="color:#ccc">Delete locked</span>{% endif %}<br><br>{% for kid_id, kid in school.kids.items() if kid.van_plate==vp %}<div style="margin:6px 0;padding:8px;background:#FFF8E1;border-radius:8px;display:flex;justify-content:space-between;align-items:center"><span>👦 {{kid.name}} ({{kid.stage}}) - {{kid.status[:25]}}</span>{% if not locked %}<a href="/admin/{{code}}/delete_kid/{{kid.id}}" onclick="return confirm('Delete {{kid.name}}?')" style="color:red;font-size:12px">❌ Delete</a>{% else %}<span style="color:#ccc">locked</span>{% endif %}</div>{% endfor %}</div>{% endfor %}"""
 
 @app.route("/admin/<code>")
 def admin(code):
     db = load_db(); code = normalize_code(code); school = db['schools'].get(code)
-    if not school: return CSS + "<div class='card' style='background:#ffcccc'><h2>School Deleted or Not Found</h2><p>This school was deleted by Super Admin. Driver & Admin links no longer work.</p><a href='/'>Go Home</a></div>"
+    if not school: return CSS + "<div class='card' style='background:#ffcccc'><h2>🚫 School Deleted by Super Admin</h2><p>All driver & admin links blocked. Data removed.</p><a href='/'>Home</a></div>"
     changed=False
     for kid in school['kids'].values():
         if maybe_auto_reset(kid): changed=True
     if changed: save_db(db)
     from jinja2 import Template
-    return Template(ADMIN_HTML).render(school=school, code=code, locked=is_locked(school), kampala_time=current_time_str(), total_kids=len(school['kids']), db_file="Supabase ✅" if SUPABASE_URL else "Local")
+    return Template(ADMIN_HTML).render(school=school, code=code, locked=is_locked(school), kampala_time=current_time_str(), today=str(date.today()), total_kids=len(school['kids']), db_file="Supabase ✅" if SUPABASE_URL else "Local")
 
 @app.route("/admin/<code>/add_van", methods=["POST"])
 def add_van(code):
     db = load_db(); code = normalize_code(code); plate = normalize_plate(request.form.get('plate',''))
+    if code not in db['schools']: return CSS + "<div class='card'><h2>School Deleted</h2></div>"
+    if is_locked(db['schools'][code]): return CSS + "<div class='card' style='background:#ffcccc'><h2>🚫 EXPIRED - Pay to unlock. Contact Super Admin.</h2><p>Data safe, just locked.</p><a href='/'>Home</a></div>"
     if not plate: return redirect(f"/admin/{code}")
-    if code not in db['schools']: return CSS + "<div class='card'><h2>School Deleted - Cannot add van</h2></div>"
     db['schools'][code]['vans'][plate] = {"plate": plate,"driver_name": request.form.get('driver_name','Driver'),"driver_phone": request.form.get('driver_phone','')}
     save_db(db); return redirect(f"/admin/{code}")
 
@@ -199,8 +202,8 @@ def add_van(code):
 def delete_van(code, plate):
     db = load_db(); c=normalize_code(code); p=normalize_plate(plate)
     if c in db['schools']:
+        if is_locked(db['schools'][c]): return CSS + "<div class='card'><h2>🔒 Cannot delete when expired</h2></div>"
         db['schools'][c]['vans'].pop(p, None)
-        # also delete kids in that van
         to_del = [kid_id for kid_id, kid in db['schools'][c]['kids'].items() if kid.get('van_plate')==p]
         for kid_id in to_del: db['schools'][c]['kids'].pop(kid_id, None)
         save_db(db)
@@ -209,13 +212,16 @@ def delete_van(code, plate):
 @app.route("/admin/<code>/delete_kid/<kid_id>")
 def delete_kid(code, kid_id):
     db = load_db(); c=normalize_code(code)
-    if c in db['schools']: db['schools'][c]['kids'].pop(kid_id, None); save_db(db)
+    if c in db['schools']:
+        if is_locked(db['schools'][c]): return CSS + "<div class='card'><h2>🔒 Cannot delete when expired</h2></div>"
+        db['schools'][c]['kids'].pop(kid_id, None); save_db(db)
     return redirect(f"/admin/{code}")
 
 @app.route("/admin/<code>/add_kid", methods=["POST"])
 def add_kid(code):
     db = load_db(); import uuid; code = normalize_code(code); kid_id = str(uuid.uuid4())[:8].upper()
     if code not in db['schools']: return CSS + "<div class='card'><h2>School Deleted</h2></div>"
+    if is_locked(db['schools'][code]): return CSS + "<div class='card' style='background:#ffcccc'><h2>🚫 EXPIRED - Pay to unlock</h2><p>Data safe, just locked.</p></div>"
     van_plate = normalize_plate(request.form.get('van_plate',''))
     if van_plate not in db['schools'][code]['vans']: return f"Van {van_plate} not found! <a href='/admin/{code}'>Back</a>"
     db['schools'][code]['kids'][kid_id] = {"id": kid_id,"name": request.form.get('kid_name','Kid'),"stage": request.form.get('stage',''),"parent_phone": request.form.get('parent_phone',''),"van_plate": van_plate,"status": "At Home - waiting for van","times": {},"absent": False}
@@ -225,45 +231,46 @@ def add_kid(code):
 def reset_all(code):
     db = load_db(); code = normalize_code(code)
     if code not in db['schools']: return redirect("/")
+    if is_locked(db['schools'][code]): return CSS + "<div class='card' style='background:#ffcccc'><h2>🚫 EXPIRED - Cannot reset until payment</h2><a href='/'>Home</a></div>"
     for kid in db['schools'][code]['kids'].values(): kid['times']={}; kid['status']="At Home - waiting for van"; kid['absent']=False; kid.pop('dropped_home_ts',None)
     save_db(db); return redirect(f"/admin/{code}")
 
-DRIVER_HTML = CSS + """<link rel="manifest" href="/manifest.json"><h2>Driver: {{van.driver_name}} - Van {{van.plate}} - {{school.name}}</h2>
+DRIVER_HTML = CSS + """<link rel="manifest" href="/manifest.json">{% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1><p>Paid until {{school.paid_until}} - Today {{today}}</p><p>Driver cannot use app. Tell director to pay Super Admin.</p><p>Your data SAFE - not deleted, just locked.</p></div>{% endif %}<h2>Driver: {{van.driver_name}} - Van {{van.plate}} - {{school.name}}</h2>
 <div id="netStatus" style="padding:8px;border-radius:8px;text-align:center;font-weight:bold">Checking network...</div>
-{% if locked %}<div class="card" style="background:#ffcccc"><h1>PAY TO UNLOCK - Contact Director</h1></div>{% endif %}<p>Code: {{code}} | {{kampala_time}} | {{today}} | {{kids|length}} kids</p>
+<p>Code: {{code}} | {{kampala_time}} | {{today}} | {{kids|length}} kids | {% if locked %}<span style="color:red">LOCKED</span>{% else %}Active{% endif %}</p>
 <div style="display:flex;gap:12px;justify-content:space-between;flex-wrap:nowrap">
   <div class="card" style="flex:1;min-width:0;border:2px solid #0a7a2a;background:#e8f5e9;margin:0">
     <h3 style="color:#0a7a2a;margin-top:0;font-size:13px;text-align:center">🏫 Quick Drop</h3>
-    <button class="btn-done" onclick="massDrop('dropped_school')" style="width:100%;font-size:13px;padding:12px;border-radius:12px">🏫 DROP ALL AT SCHOOL</button>
-    <p style="font-size:10px;color:#555;margin:6px 0 0;text-align:center">One tap = all kids</p>
+    <button class="btn-done" onclick="massDrop('dropped_school')" {% if locked %}disabled style="background:#ccc!important"{% endif %} style="width:100%;font-size:13px;padding:12px;border-radius:12px">🏫 DROP ALL AT SCHOOL</button>
   </div>
   <div style="width:12px;flex-shrink:0"></div>
   <div class="card" style="flex:1;min-width:0;border:2px solid #d32f2f;margin:0">
     <h3 style="color:#d32f2f;margin-top:0;font-size:13px;text-align:center">🚨 Alert All</h3>
-    <select id="trafficReason" style="width:100%;padding:8px;border:2px solid #d32f2f;font-size:11px"><option value="Heavy traffic - 15 mins late">Traffic - 15 mins late</option><option value="Heavy traffic - 30 mins late">Traffic - 30 mins late</option><option value="Tyre puncture - fixing, 20 mins delay">Puncture - 20 mins</option><option value="Fuel stop - 10 mins delay">Fuel - 10 mins</option><option value="custom">✏️ Custom</option></select>
+    <select id="trafficReason" {% if locked %}disabled{% endif %} style="width:100%;padding:8px;border:2px solid #d32f2f;font-size:11px"><option value="Heavy traffic - 15 mins late">Traffic - 15 mins late</option><option value="Heavy traffic - 30 mins late">Traffic - 30 mins late</option><option value="Tyre puncture - fixing, 20 mins delay">Puncture - 20 mins</option><option value="Fuel stop - 10 mins delay">Fuel - 10 mins</option><option value="custom">✏️ Custom</option></select>
     <input id="trafficCustom" placeholder="Custom 80 chars" style="width:95%;display:none;margin-top:6px" maxlength="80">
-    <button class="btn-red" onclick="sendTraffic()" style="width:100%;margin-top:8px;padding:10px;font-size:12px">🚨 SEND ALERT</button>
+    <button class="btn-red" onclick="sendTraffic()" {% if locked %}disabled style="background:#ccc"{% endif %} style="width:100%;margin-top:8px;padding:10px;font-size:12px">🚨 SEND ALERT</button>
   </div>
 </div>
-<hr><div class="grid">{% for kid_id, kid in kids.items() %}<div class="card"><b>{{kid.name}}</b> - {{kid.stage}}<br>Status: <span class="badge">{{kid.status}}</span><div class="progress"><div class="progress-fill" style="width: {{kid.progress}}%"></div></div><br><button onclick="action('{{kid.id}}','picked_home')">PICKED HOME</button><button onclick="action('{{kid.id}}','dropped_school')">DROPPED SCHOOL</button><button onclick="action('{{kid.id}}','picked_school')">PICKED SCHOOL</button><button onclick="action('{{kid.id}}','dropped_home')">DROPPED HOME</button><br><button class="btn-orange" onclick="action('{{kid.id}}','absent')">ABSENT</button><button class="btn-grey" onclick="action('{{kid.id}}','present')">BACK</button></div>{% endfor %}</div>
+<hr><div class="grid">{% for kid_id, kid in kids.items() %}<div class="card"><b>{{kid.name}}</b> - {{kid.stage}}<br>Status: <span class="badge">{{kid.status}}</span><div class="progress"><div class="progress-fill" style="width: {{kid.progress}}%"></div></div><br><button onclick="action('{{kid.id}}','picked_home')" {% if locked %}disabled style="background:#ccc"{% endif %}>PICKED HOME</button><button onclick="action('{{kid.id}}','dropped_school')" {% if locked %}disabled style="background:#ccc"{% endif %}>DROPPED SCHOOL</button><button onclick="action('{{kid.id}}','picked_school')" {% if locked %}disabled style="background:#ccc"{% endif %}>PICKED SCHOOL</button><button onclick="action('{{kid.id}}','dropped_home')" {% if locked %}disabled style="background:#ccc"{% endif %}>DROPPED HOME</button><br><button class="btn-orange" onclick="action('{{kid.id}}','absent')" {% if locked %}disabled style="background:#ccc"{% endif %}>ABSENT</button><button class="btn-grey" onclick="action('{{kid.id}}','present')" {% if locked %}disabled style="background:#ccc"{% endif %}>BACK</button></div>{% endfor %}</div>
 <script>
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(()=>{}); }
 let queue = JSON.parse(localStorage.getItem('fikisha_queue_{{van.plate}}')||'[]');
 if(queue.length>100){ queue=queue.slice(-100); localStorage.setItem('fikisha_queue_{{van.plate}}', JSON.stringify(queue)); }
 function updateNet(){
   let el=document.getElementById('netStatus');
-  if(navigator.onLine){ el.innerText='✅ ONLINE - Live | Queued: '+queue.length; el.style.background='#e8f5e9'; if(queue.length>0) syncQueue(); }
-  else { el.innerText='⚠️ OFFLINE - taps saved, auto-send when online | Queued: '+queue.length; el.style.background='#fff3cd'; }
+  if(navigator.onLine){ el.innerText='✅ ONLINE - {% if locked %}LOCKED{% else %}Live{% endif %} | Queued: '+queue.length; el.style.background='#e8f5e9'; if(queue.length>0) syncQueue(); }
+  else { el.innerText='⚠️ OFFLINE - taps saved | Queued: '+queue.length; el.style.background='#fff3cd'; }
 }
 window.addEventListener('online', updateNet); window.addEventListener('offline', updateNet); updateNet();
 function saveQueue(){ if(queue.length>100) queue=queue.slice(-100); localStorage.setItem('fikisha_queue_{{van.plate}}', JSON.stringify(queue)); updateNet(); }
 function action(kid_id, act){
+  {% if locked %} alert('🚫 Payment expired - app locked until Super Admin extends date'); return; {% endif %}
   queue.push({kid_id, action:act, time: new Date().toISOString()}); saveQueue();
   if(navigator.onLine){
     fetch('/api/{{code}}/{{van.plate}}/action', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({kid_id, action:act})})
- .then(r=>r.json()).then(j=>{
+.then(r=>r.json()).then(j=>{
      if(j.ok){ queue=queue.filter(q=>!(q.kid_id==kid_id && q.action==act)); saveQueue(); location.reload(); }
-     else{ alert(j.error||'Error'); location.reload(); }
+     else{ alert(j.error||'Locked - Pay to unlock'); location.reload(); }
    }).catch(()=>{ alert('Saved offline - will sync'); location.reload(); });
   } else { alert('⚠️ Offline saved!'); location.reload(); }
 }
@@ -273,12 +280,14 @@ function syncQueue(){
 .then(r=>r.json()).then(j=>{ if(j.ok){ queue=[]; saveQueue(); } });
 }
 function massDrop(act){
+  {% if locked %} alert('🚫 Locked'); return; {% endif %}
   if(!confirm('DROP ALL at school?')) return;
-  if(!navigator.onLine){ alert('Mass drop needs online - use individual buttons offline'); return; }
+  if(!navigator.onLine){ alert('Mass drop needs online'); return; }
   fetch('/api/{{code}}/{{van.plate}}/mass', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:act})})
 .then(r=>r.json()).then(j=>{ alert('✅ Dropped '+j.count); location.reload(); }).catch(()=>{ alert('Network error'); });
 }
 function sendTraffic(){
+  {% if locked %} alert('🚫 Locked'); return; {% endif %}
   let re=document.getElementById('trafficReason');let ce=document.getElementById('trafficCustom');let msg=re.value;
   if(msg=='custom'){msg=ce.value.trim();}if(!msg){alert('Choose reason!');return;}
   if(!navigator.onLine){ alert('Alert needs network'); return; }
@@ -295,7 +304,7 @@ def driver_page(code, plate):
         db = load_db(); code = normalize_code(code); plate_norm = normalize_plate(plate)
         school = db['schools'].get(code)
         if not school:
-            return CSS + "<div class='card' style='background:#ffcccc'><h2>🚫 School Deleted or Expired</h2><p>This school was deleted by Super Admin. All driver links are blocked.</p><a href='/'>Home</a></div>"
+            return CSS + "<div class='card' style='background:#ffcccc'><h2>🚫 School Deleted or Expired</h2><p>This school was deleted by Super Admin. All driver links blocked.</p><a href='/'>Home</a></div>"
         van = school['vans'].get(plate_norm)
         if not van:
             return CSS + f"<div class='card'><h2>Van {plate_norm} Deleted</h2><p>Available vans: {list(school['vans'].keys())}</p><a href='/admin/{code}'>Back to Admin</a></div>"
@@ -322,7 +331,7 @@ def driver_action(code, plate):
         db = load_db(); code = normalize_code(code); plate_norm = normalize_plate(plate)
         school = db['schools'].get(code)
         if not school: return jsonify({"ok": False, "error":"school deleted"}), 404
-        if is_locked(school): return jsonify({"ok": False, "locked": True}), 403
+        if is_locked(school): return jsonify({"ok": False, "locked": True, "error":"Payment expired - app locked"}), 403
         data = request.get_json() or {}; kid_id = data.get('kid_id'); act = data.get('action')
         if not kid_id or not act: return jsonify({"ok": False, "error":"bad request"}), 400
         if kid_id not in school['kids']: return jsonify({"ok": False, "error":"kid deleted"}), 404
@@ -357,7 +366,7 @@ def mass_action(code, plate):
         db = load_db(); code = normalize_code(code); plate_norm = normalize_plate(plate)
         school = db['schools'].get(code)
         if not school: return jsonify({"ok": False, "error":"school deleted"}), 404
-        if is_locked(school): return jsonify({"locked": True}), 403
+        if is_locked(school): return jsonify({"ok": False, "locked": True, "error":"Payment expired"}), 403
         data = request.get_json() or {}; act = data.get('action','')
         short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b")
         count = 0
@@ -379,7 +388,7 @@ def traffic(code, plate):
         db = load_db(); code = normalize_code(code); plate_norm = normalize_plate(plate)
         school = db['schools'].get(code)
         if not school: return jsonify({"ok": False, "error":"school deleted"}), 404
-        if is_locked(school): return jsonify({"locked": True}), 403
+        if is_locked(school): return jsonify({"ok": False, "locked": True, "error":"Payment expired"}), 403
         raw_msg = (request.get_json() or {}).get('message','').strip()
         if not raw_msg or len(raw_msg) < 5: return jsonify({"ok": False}), 400
         clean_msg = raw_msg[:100].strip(); sent = 0
@@ -396,7 +405,7 @@ def bulk_sync(code, plate):
         db = load_db(); code = normalize_code(code); plate_norm = normalize_plate(plate)
         school = db['schools'].get(code)
         if not school: return jsonify({"ok": False, "error":"school deleted"}), 404
-        if is_locked(school): return jsonify({"locked": True}), 403
+        if is_locked(school): return jsonify({"ok": False, "locked": True, "error":"Payment expired"}), 403
         items = (request.get_json() or {}).get('items', [])
         if len(items)>100: items=items[-100:]
         short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b")
@@ -449,7 +458,7 @@ def report(code):
         if not school: return CSS + "<div class='card'><h2>School Deleted</h2><a href='/'>Home</a></div>"
         today = str(date.today()); kids = list(school['kids'].values())
         total = len(kids); picked_home = sum(1 for k in kids if 'picked_home' in k.get('times',{})); dropped_school = sum(1 for k in kids if 'dropped_school' in k.get('times',{})); dropped_home = sum(1 for k in kids if 'dropped_home' in k.get('times',{})); absent = sum(1 for k in kids if k.get('absent'))
-        html = CSS + f"""<div class='no-print'><a href="/report/{code}/csv"><button class="btn-blue">📥 CSV</button></a><a href="/admin/{code}"><button>Back</button></a></div><div class='card'><h2>📊 Report - {school['name']}</h2><p>{today} | {current_time_str()}</p><p>Total:{total} Picked:{picked_home} School:{dropped_school} Home:{dropped_home} Absent:{absent}</p></div><div class='card'><table><tr><th>Kid</th><th>Van</th><th>Status</th></tr>"""
+        html = CSS + f"""<div class='no-print'><a href="/report/{code}/csv"><button class="btn-blue">📥 CSV</button></a><a href="/admin/{code}"><button>Back</button></a></div><div class='card'><h2>📊 Report - {school['name']} - {'🔴 EXPIRED' if is_locked(school) else '🟢 Active'}</h2><p>{today} | {current_time_str()} | Paid until: {school.get('paid_until','')}</p><p>Total:{total} Picked:{picked_home} School:{dropped_school} Home:{dropped_home} Absent:{absent}</p></div><div class='card'><table><tr><th>Kid</th><th>Van</th><th>Status</th></tr>"""
         for k in kids: html += f"<tr><td>{k.get('name','')}</td><td>{k.get('van_plate','')}</td><td>{k.get('status','')}</td></tr>"
         html += "</table></div>"; return html
     except Exception as e:

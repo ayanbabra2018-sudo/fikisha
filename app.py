@@ -102,6 +102,8 @@ def maybe_auto_reset(kid):
     return False
 def get_van_pin(van):
     phone = to_wa(van.get('driver_phone','')); return phone[-4:] if len(phone)>=4 else "1234"
+def get_admin_pin(school):
+    phone = to_wa(school.get('director_phone','')); return phone[-4:] if len(phone)>=4 else "1234"
 
 CSS = """<style>body{font-family:system-ui,Arial;background:#FFF8E1;margin:0;padding:15px;color:#1a1a1a}h2{color:#0D2A54;border-bottom:3px solid #FFC107;padding-bottom:8px}.card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 4px 14px rgba(0,0,0,0.1);border-top:5px solid #FFC107}input,select{padding:11px;border-radius:10px;border:2px solid #FFC107;margin:6px;width:90%}button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px}.btn-done{background:#0a7a2a!important;color:white!important}.btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}.btn-grey{background:#888;color:white}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}}.badge{padding:6px 12px;border-radius:20px;background:#0D2A54;color:#FFC107}.progress{height:10px;background:#eee;border-radius:10px;overflow:hidden}.progress-fill{height:100%;background:linear-gradient(90deg,#0a7a2a,#FFC107)}a{color:#1565c0;font-weight:bold;text-decoration:none}table{width:100%;border-collapse:collapse}th,td{padding:8px;text-align:left;border-bottom:1px solid #eee}@media print{button,.no-print{display:none}}</style>"""
 
@@ -120,14 +122,14 @@ def home():
     html += """<div class="card"><h3>Create New School</h3><form method="post" action="/create_school"><input name="school_name" placeholder="Bright Angels" required><input name="code" placeholder="Code BRIGHT123" required><input name="director" placeholder="Director WhatsApp 2567..." required><input name="paid_until" type="date" required><button>Add School +</button></form></div><hr>"""
     for code, s in db.get("schools", {}).items():
         lock = "🔴 EXPIRED" if is_locked(s) else "🟢 Active"
-        html += f"""<div class='card' style="{'border:3px solid red' if is_locked(s) else ''}"><b>{s['name']}</b> ({code}) - {lock} - Paid: {s.get('paid_until','?')} - Director: {s.get('director_phone','')}<br>
+        html += f"""<div class='card' style="{'border:3px solid red' if is_locked(s) else ''}"><b>{s['name']}</b> ({code}) - {lock} - Paid: {s.get('paid_until','?')} - Director: {s.get('director_phone','')} PIN:{get_admin_pin(s)}<br>
         <form method='post' action='/super/update_school/{code}' style='margin:10px 0;background:#FFF8E1;padding:10px;border-radius:10px'>
         <b>Edit School:</b><br><input name='school_name' value='{s['name']}' required style='width:28%'><input name='director' value='{s.get('director_phone','')}' required style='width:28%'><input type='date' name='paid_until' value='{s.get('paid_until','')}' required style='width:28%'><button style='padding:6px 12px'>Save Edit ✅</button></form>
-        <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Daily</a> | <a href='/report/{code}/weekly'>Weekly</a> | <a href='/super/delete_school/{code}' onclick="return confirm('DELETE {code}?')" style='color:red'>Delete ❌</a><br><br>
-        <button onclick="shareAdmin('{code}','{s['name']}','{s.get('director_phone','')}')" class="btn-blue">📲 Share Admin Link</button><br>"""
+        <a href='/admin/{code}'>Manage (needs PIN)</a> | <a href='/report/{code}'>Daily</a> | <a href='/report/{code}/weekly'>Weekly</a> | <a href='/super/delete_school/{code}' onclick="return confirm('DELETE {code}?')" style='color:red'>Delete ❌</a><br><br>
+        <button onclick="shareAdmin('{code}','{s['name']}','{s.get('director_phone','')}','{get_admin_pin(s)}')" class="btn-blue">📲 Share Admin Link + PIN</button><br>"""
         for vp, van in s.get('vans', {}).items(): html += f"Van <b>{vp}</b> - {van.get('driver_name','')} PIN:{get_van_pin(van)} - <a href='/driver/{code}/{vp}'>Driver</a><br>"
         html += "</div>"
-    html += """<script>function shareAdmin(code,name,phone){let link=window.location.origin+"/admin/"+code;let msg="FIKISHA Admin link for "+name+" ("+code+"): "+link;let clean=phone.replace(/[^0-9]/g,'');window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");}</script>"""
+    html += """<script>function toWa(phone){let c=phone.replace(/[^0-9]/g,'').trim();if(c.startsWith('0'))c='256'+c.substring(1);return c;} function shareAdmin(code,name,phone,pin){let link=window.location.origin+"/admin/"+code;let msg="FIKISHA Admin link for "+name+" ("+code+"): "+link+"\\nAdmin PIN: "+pin+" (last 4 of your phone). Keep it safe.";let clean=toWa(phone);window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");}</script>"""
     return html
 
 @app.route("/create_school", methods=["POST"])
@@ -148,9 +150,12 @@ def update_school(code):
 def delete_school(code):
     db = load_db(); db['schools'].pop(normalize_code(code), None); save_db(db); return redirect("/")
 
+# --- ADMIN LOGIN + PAGE ---
+ADMIN_LOGIN_HTML = CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 Admin PIN for {{school.name}} ({{code}})</h2><p>Director: {{school.director_phone}}<br>Enter PIN (last 4 digits)</p><form method="post"><input name="pin" type="password" placeholder="4-digit PIN" required style="text-align:center;font-size:22px;letter-spacing:8px" maxlength="4"><br><button style="width:95%">Unlock Admin</button></form><p style="font-size:12px;color:#666">Ask Super Admin if you forgot<br>Super password also works</p>{% if error %}<p style="color:red">{{error}}</p>{% endif %}</div>"""
+
 ADMIN_HTML = CSS + """
 {% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1></div>{% endif %}
-<h2>{{school.name}} Admin ({{code}})</h2>
+<h2>{{school.name}} Admin ({{code}}) - <a href="/admin/{{code}}/logout" style="font-size:12px">Logout PIN</a></h2>
 <p>{{kampala_time}} | {{db_file}} | <a href="/report/{{code}}">Daily</a> | <a href="/report/{{code}}/weekly">Weekly 📊</a> | <a href="/">Super</a></p>
 <div class="card"><h3>Daily Control</h3>{% if locked %}<button disabled>🔒 Locked</button>{% else %}<form method="post" action="/api/{{code}}/reset_all"><button style="background:#0a7a2a;width:100%">RESET ALL FOR TOMORROW</button></form>{% endif %}</div>
 <div class="card"><h3>Add Van</h3>{% if locked %}<p>🔒 Locked</p>{% else %}<form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form>{% endif %}</div>
@@ -158,18 +163,41 @@ ADMIN_HTML = CSS + """
 <hr><h3>Vans & Kids ({{total_kids}})</h3>
 {% for vp, van in school.vans.items() %}
 <div class="card"><b>{{vp}} - {{van.driver_name}}</b> - {{van.driver_phone}} - PIN: {{van.pin}} - <a href="/driver/{{code}}/{{vp}}">Driver Page</a><br>
+<div style="margin:8px 0"><button onclick="shareDriver('{{vp}}','{{van.driver_name}}','{{van.driver_phone}}','{{van.pin}}','{{code}}')" class="btn-done" style="padding:8px 14px">📲 Share Driver Link + PIN</button> <button onclick="copyLink(window.location.origin+'/driver/{{code}}/{{vp}}')" class="btn-blue" style="padding:8px 14px">🔗 Copy Driver Link</button></div>
 {% if not locked %}<form method="post" action="/admin/{{code}}/edit_van/{{vp}}" style="background:#FFF8E1;padding:8px;border-radius:8px;margin:8px 0"><input name="driver_name" value="{{van.driver_name}}" required style="width:30%"> <input name="driver_phone" value="{{van.driver_phone}}" required style="width:35%"> <button style="padding:6px 10px">Save Van</button> | <a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}?')" style="color:red">Delete Van ❌</a></form>{% endif %}
 {% for kid_id, kid in school.kids.items() if kid.van_plate==vp %}
 <div style="margin:8px 0;padding:10px;background:#FFF8E1;border-radius:10px"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>👦 <b>{{kid.name}}</b> ({{kid.stage}}) - {{kid.status[:30]}}<br>Parent: {{kid.parent_phone}} | <a href="/p/{{kid.id}}" target="_blank">Parent Link 👁️</a></span><div><button onclick="shareParent('{{kid.name}}','{{kid.id}}','{{kid.parent_phone}}')" class="btn-blue" style="padding:6px 10px;font-size:11px">📲 Share Parent Link</button>{% if not locked %}<a href="#" onclick="document.getElementById('edit-{{kid.id}}').style.display='block';return false;" style="font-size:11px">✏️ Edit</a> | <a href="/admin/{{code}}/delete_kid/{{kid.id}}" onclick="return confirm('Delete {{kid.name}}?')" style="color:red;font-size:11px">❌ Delete</a>{% endif %}</div></div>
 {% if not locked %}<div id="edit-{{kid.id}}" style="display:none;background:white;padding:8px;border-radius:8px;margin-top:8px"><form method="post" action="/admin/{{code}}/edit_kid/{{kid.id}}"><input name="kid_name" value="{{kid.name}}" required style="width:22%"> <input name="stage" value="{{kid.stage}}" style="width:18%"> <input name="parent_phone" value="{{kid.parent_phone}}" required style="width:28%"><select name="van_plate" style="width:18%">{% for vvp in school.vans %}<option value="{{vvp}}" {% if vvp==kid.van_plate %}selected{% endif %}>{{vvp}}</option>{% endfor %}</select><button style="padding:6px 10px">Save Kid</button> <button type="button" onclick="document.getElementById('edit-{{kid.id}}').style.display='none'" class="btn-grey" style="padding:6px">Cancel</button></form></div>{% endif %}</div>
 {% endfor %}</div>{% endfor %}
-<script>function shareParent(name,kidId,phone){let link=window.location.origin+"/p/"+kidId;let msg="Hello, track "+name+" live on FIKISHA: "+link+" - You will also get WhatsApp alerts.";let clean=phone.replace(/[^0-9]/g,'');window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");}</script>
+<script>
+function toWa(phone){let c=phone.replace(/[^0-9]/g,'').trim();if(c.startsWith('0'))c='256'+c.substring(1);if(c.length==9)c='256'+c;return c;}
+function shareParent(name,kidId,phone){let clean=toWa(phone);let link=window.location.origin+"/p/"+kidId;let msg="Hello, track "+name+" live on FIKISHA: "+link+" - You will get WhatsApp alerts.";if(clean.length<11){alert('Parent phone wrong: '+phone);copyLink(link);return;}window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");}
+function shareDriver(plate, driverName, driverPhone, pin, code){let clean=toWa(driverPhone);let link=window.location.origin+"/driver/"+code+"/"+plate;let msg="Hello "+driverName+", your FIKISHA Driver link for van "+plate+": "+link+"\\nPIN: "+pin+" (last 4 of your phone).";if(clean.length<11){alert('Driver phone wrong');copyLink(link);return;}window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");}
+function copyLink(text){navigator.clipboard.writeText(text).then(()=>{alert('Copied: '+text);}).catch(()=>{prompt('Copy this link:', text);});}
+</script>
 """
 
-@app.route("/admin/<code>")
+@app.route("/admin/<code>", methods=["GET", "POST"])
 def admin(code):
     db = load_db(); code = normalize_code(code); school = db['schools'].get(code)
-    if not school: return CSS + "<div class='card'><h2>🚫 School Deleted</h2></div>"
+    if not school: return CSS + "<div class='card'><h2>🚫 School Deleted</h2><a href='/'>Home</a></div>"
+    # auth check
+    real_pin = get_admin_pin(school)
+    super_auth = request.cookies.get("super_auth")
+    admin_cookie = request.cookies.get(f"admin_pin_{code}")
+    if request.method == "POST":
+        entered = request.form.get('pin','').strip()
+        if entered == real_pin or entered == SUPER_ADMIN_PASSWORD or (super_auth==SUPER_ADMIN_PASSWORD and entered==SUPER_ADMIN_PASSWORD):
+            resp = make_response(redirect(f"/admin/{code}"))
+            resp.set_cookie(f"admin_pin_{code}", real_pin, max_age=86400*30, httponly=True, samesite='Lax')
+            return resp
+        else:
+            from jinja2 import Template
+            return Template(CSS + ADMIN_LOGIN_HTML + "<p style='color:red;text-align:center'>Wrong PIN!</p>").render(school=school, code=code, error="Wrong PIN")
+    if admin_cookie!= real_pin and super_auth!= SUPER_ADMIN_PASSWORD:
+        from jinja2 import Template
+        return Template(ADMIN_LOGIN_HTML).render(school=school, code=code, error=None)
+
     for van in school['vans'].values(): van['pin']=get_van_pin(van)
     changed=False
     for kid in school['kids'].values():
@@ -178,11 +206,21 @@ def admin(code):
     from jinja2 import Template
     return Template(ADMIN_HTML).render(school=school, code=code, locked=is_locked(school), kampala_time=current_time_str(), today=str(date.today()), total_kids=len(school['kids']), db_file="Supabase ✅" if SUPABASE_URL else "Local")
 
+@app.route("/admin/<code>/logout")
+def admin_logout(code):
+    code_norm = normalize_code(code)
+    resp = redirect(f"/admin/{code_norm}")
+    resp.set_cookie(f"admin_pin_{code_norm}", "", max_age=0)
+    return resp
+
 @app.route("/admin/<code>/add_van", methods=["POST"])
 def add_van(code):
     db = load_db(); code = normalize_code(code); plate = normalize_plate(request.form.get('plate',''))
     if code not in db['schools']: return "School deleted"
     if is_locked(db['schools'][code]): return CSS + "<div class='card'><h2>🚫 EXPIRED</h2></div>"
+    # check admin pin cookie
+    if request.cookies.get(f"admin_pin_{code}")!= get_admin_pin(db['schools'][code]) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD:
+        return redirect(f"/admin/{code}")
     db['schools'][code]['vans'][plate] = {"plate": plate,"driver_name": request.form.get('driver_name','Driver'),"driver_phone": request.form.get('driver_phone','')}
     save_db(db); return redirect(f"/admin/{code}")
 
@@ -190,6 +228,8 @@ def add_van(code):
 def edit_van(code, plate):
     db = load_db(); c=normalize_code(code); p=normalize_plate(plate)
     if c in db['schools'] and not is_locked(db['schools'][c]) and p in db['schools'][c]['vans']:
+        if request.cookies.get(f"admin_pin_{c}")!= get_admin_pin(db['schools'][c]) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD:
+            return redirect(f"/admin/{c}")
         db['schools'][c]['vans'][p]['driver_name']=request.form.get('driver_name','Driver'); db['schools'][c]['vans'][p]['driver_phone']=request.form.get('driver_phone',''); save_db(db)
     return redirect(f"/admin/{c}")
 
@@ -197,6 +237,8 @@ def edit_van(code, plate):
 def delete_van_route(code, plate):
     db = load_db(); c=normalize_code(code); p=normalize_plate(plate)
     if c in db['schools'] and not is_locked(db['schools'][c]):
+        if request.cookies.get(f"admin_pin_{c}")!= get_admin_pin(db['schools'][c]) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD:
+            return redirect(f"/admin/{c}")
         db['schools'][c]['vans'].pop(p, None)
         for kid_id in [kid_id for kid_id, kid in db['schools'][c]['kids'].items() if kid.get('van_plate')==p]: db['schools'][c]['kids'].pop(kid_id, None)
         save_db(db)
@@ -205,7 +247,10 @@ def delete_van_route(code, plate):
 @app.route("/admin/<code>/delete_kid/<kid_id>")
 def delete_kid_route(code, kid_id):
     db = load_db(); c=normalize_code(code)
-    if c in db['schools'] and not is_locked(db['schools'][c]): db['schools'][c]['kids'].pop(kid_id, None); save_db(db)
+    if c in db['schools'] and not is_locked(db['schools'][c]):
+        if request.cookies.get(f"admin_pin_{c}")!= get_admin_pin(db['schools'][c]) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD:
+            return redirect(f"/admin/{c}")
+        db['schools'][c]['kids'].pop(kid_id, None); save_db(db)
     return redirect(f"/admin/{code}")
 
 @app.route("/admin/<code>/add_kid", methods=["POST"])
@@ -213,6 +258,8 @@ def add_kid_route(code):
     db = load_db(); kid_id = str(uuid.uuid4())[:8].upper(); code = normalize_code(code)
     if code not in db['schools']: return "School deleted"
     if is_locked(db['schools'][code]): return CSS + "<div class='card'><h2>🚫 EXPIRED</h2></div>"
+    if request.cookies.get(f"admin_pin_{code}")!= get_admin_pin(db['schools'][code]) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD:
+        return redirect(f"/admin/{code}")
     van_plate = normalize_plate(request.form.get('van_plate',''))
     if van_plate not in db['schools'][code]['vans']: return f"Van not found <a href='/admin/{code}'>Back</a>"
     db['schools'][code]['kids'][kid_id] = {"id": kid_id,"name": request.form.get('kid_name','Kid'),"stage": request.form.get('stage',''),"parent_phone": request.form.get('parent_phone',''),"van_plate": van_plate,"status": "At Home - waiting for van","times": {},"absent": False}
@@ -223,6 +270,8 @@ def add_kid_route(code):
 def edit_kid_route(code, kid_id):
     db = load_db(); c=normalize_code(code)
     if c in db['schools'] and not is_locked(db['schools'][c]) and kid_id in db['schools'][c]['kids']:
+        if request.cookies.get(f"admin_pin_{c}")!= get_admin_pin(db['schools'][c]) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD:
+            return redirect(f"/admin/{c}")
         kid = db['schools'][c]['kids'][kid_id]; kid['name']=request.form.get('kid_name',kid['name']); kid['stage']=request.form.get('stage',kid.get('stage','')); kid['parent_phone']=request.form.get('parent_phone',kid.get('parent_phone','')); new_van = normalize_plate(request.form.get('van_plate',''));
         if new_van in db['schools'][c]['vans']: kid['van_plate']=new_van
         save_db(db)
@@ -233,6 +282,8 @@ def reset_all(code):
     db = load_db(); code = normalize_code(code)
     if code not in db['schools']: return redirect("/")
     if is_locked(db['schools'][code]): return CSS + "<div class='card'><h2>🚫 EXPIRED</h2></div>"
+    if request.cookies.get(f"admin_pin_{code}")!= get_admin_pin(db['schools'][code]) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD:
+        return redirect(f"/admin/{code}")
     for kid in db['schools'][code]['kids'].values(): kid['times']={}; kid['status']="At Home - waiting for van"; kid['absent']=False; kid.pop('dropped_home_ts',None)
     save_db(db); return redirect(f"/admin/{code}")
 
@@ -375,7 +426,6 @@ def bulk_sync(code, plate):
         school['attendance_log']=log[-500:]; save_db(db); return jsonify({"ok": True, "count": count})
     except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
-# ===== FIXED PARENT PAGE =====
 @app.route("/p/<kid_id>")
 def parent_view(kid_id):
     db = load_db()

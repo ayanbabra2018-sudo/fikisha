@@ -18,12 +18,13 @@ def normalize_code(p): return str(p).upper().strip().replace(" ", "") if p else 
 
 app = Flask(__name__)
 
-# --- PERSISTENT DB - SUPABASE + LOCAL BACKUP ---
+# --- CONFIG ---
 DB_LOCK = threading.Lock()
 DB_FILE = "/data/fikisha_db.json" if os.path.exists("/data") else "fikisha_db.json"
 BACKUP_FILE = DB_FILE + ".backup"
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPER_ADMIN_PASSWORD = os.environ.get("SUPER_ADMIN_PASSWORD", "fikisha2026")
 
 def load_db():
     if SUPABASE_URL and SUPABASE_KEY:
@@ -110,17 +111,54 @@ def maybe_auto_reset(kid):
 
 CSS = """<style>body{font-family:system-ui,Arial;background:#FFF8E1;margin:0;padding:15px;color:#1a1a1a}h2{color:#0D2A54;border-bottom:3px solid #FFC107;padding-bottom:8px}.card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 4px 14px rgba(0,0,0,0.1);border-top:5px solid #FFC107}input,select{padding:11px;border-radius:10px;border:2px solid #FFC107;margin:6px;width:90%}button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px}.btn-done{background:#0a7a2a!important;color:white!important}.btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}.btn-grey{background:#888;color:white}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}}.badge{padding:6px 12px;border-radius:20px;background:#0D2A54;color:#FFC107}.progress{height:10px;background:#eee;border-radius:10px;overflow:hidden}.progress-fill{height:100%;background:linear-gradient(90deg,#0a7a2a,#FFC107)}a{color:#1565c0;font-weight:bold;text-decoration:none}table{width:100%;border-collapse:collapse}th,td{padding:8px;text-align:left;border-bottom:1px solid #eee}@media print{.no-print{display:none!important}}</style>"""
 
-@app.route("/")
+@app.route("/", methods=["GET", "POST"])
 def home():
+    if request.method == "POST":
+        pwd = request.form.get('password','')
+        if pwd == SUPER_ADMIN_PASSWORD:
+            resp = redirect("/")
+            resp.set_cookie("super_auth", SUPER_ADMIN_PASSWORD, max_age=86400*7, httponly=True, samesite='Lax')
+            return resp
+        else:
+            return CSS + "<div class='card' style='background:#ffcccc'><h2>Wrong password</h2><a href='/'>Try again</a></div>"
+
+    auth = request.cookies.get("super_auth")
+    if auth!= SUPER_ADMIN_PASSWORD:
+        return CSS + """
+        <div class='card' style='max-width:400px;margin:80px auto;text-align:center'>
+        <h2>🔐 FIKISHA Super Admin</h2>
+        <p>Enter password</p>
+        <form method="post">
+        <input name="password" type="password" placeholder="Password" required style="width:90%">
+        <br><button style="width:95%;margin-top:10px">Unlock</button>
+        </form>
+        <p style="font-size:11px;color:#888;margin-top:15px">Default: fikisha2026<br>Change it in Render -> ENV -> SUPER_ADMIN_PASSWORD</p>
+        </div>
+        """
+
     db = load_db()
-    html = CSS + f"<h2>FIKISHA - Super Admin (Kampala: {current_time_str()}) | DB: {DB_FILE} {'+ Supabase' if SUPABASE_URL else ''}</h2>"
+    html = CSS + f"<h2>FIKISHA - Super Admin (Kampala: {current_time_str()}) | DB: {'Supabase ✅' if SUPABASE_URL else DB_FILE}</h2>"
     html += """<div class="card"><h3>Create New School</h3><form method="post" action="/create_school"><input name="school_name" placeholder="Bright Angels" required><input name="code" placeholder="Code BRIGHT123" required><input name="director" placeholder="Director WhatsApp 2567..." required><input name="paid_until" type="date" required><button>Add School +</button></form></div><hr>"""
     for code, s in db.get("schools", {}).items():
         lock = "EXPIRED" if is_locked(s) else "Active"
-        html += f"""<div class='card'><b>{s['name']}</b> ({code}) - {lock} - Paid: {s['paid_until']}<br><form method='post' action='/super/update_paid/{code}' style='display:inline'><input type='date' name='paid_until' value='{s['paid_until']}' required><button style='padding:6px 12px;font-size:13px'>Update Paid</button></form> <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Report</a> | <a href='/super/delete_school/{code}' style='color:red'>Delete</a><br>"""
+        html += f"""<div class='card'><b>{s['name']}</b> ({code}) - {lock} - Paid: {s['paid_until']}<br>
+        <form method='post' action='/super/update_paid/{code}' style='display:inline'><input type='date' name='paid_until' value='{s['paid_until']}' required><button style='padding:6px 12px;font-size:13px'>Update Paid</button></form>
+        <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Report</a> | <a href='/super/delete_school/{code}' style='color:red'>Delete</a>
+        <br><br><button onclick="shareAdmin('{code}','{s['name']}','{s['director_phone']}')" class="btn-blue" style="padding:8px 14px">📲 Share Admin Link to Director</button>
+        <span style="font-size:12px;color:#666"> Director: {s['director_phone']}</span><br>"""
         for vp, van in s.get('vans', {}).items():
             html += f"Van <b>{vp}</b> - {van['driver_name']} - <a href='/driver/{code}/{vp}'>Driver Page</a><br>"
         html += "</div>"
+    html += """
+    <script>
+    function shareAdmin(code, schoolName, directorPhone){
+        let link = window.location.origin + "/admin/" + code;
+        let msg = "Hello! Here is your FIKISHA Admin link for " + schoolName + " (" + code + "): " + link + " - Use it to add vans, kids, and view reports. Save this link!";
+        let clean = directorPhone.replace(/[^0-9]/g,'');
+        window.open("https://wa.me/" + clean + "?text=" + encodeURIComponent(msg), "_blank");
+    }
+    </script>
+    """
     return html
 
 @app.route("/create_school", methods=["POST"])
@@ -139,7 +177,7 @@ def update_paid(code):
 def delete_school(code):
     db = load_db(); db['schools'].pop(normalize_code(code), None); save_db(db); return redirect("/")
 
-ADMIN_HTML = CSS + """<h2>{{school.name}} Admin ({{code}}) - {% if locked %}EXPIRED{% else %}Paid until {{school.paid_until}}{% endif %}</h2><p>Kampala: {{kampala_time}} | DB: {{db_file}}</p><a href="/">Super Admin</a> | <a href="/report/{{code}}">Daily Report</a><div class="card"><h3>Daily Control</h3><form method="post" action="/api/{{code}}/reset_all"><button style="background:#0a7a2a;width:100%">RESET ALL FOR TOMORROW</button></form></div><div class="card"><h3>Add Van</h3><form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form></div><div class="card"><h3>Add Kid to Van</h3><form method="post" action="/admin/{{code}}/add_kid"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form></div><hr><h3>Vans & Kids ({{total_kids}})</h3>{% for vp, van in school.vans.items() %}<div class="card"><b>{{vp}} - {{van.driver_name}} - {{van.driver_phone}}</b> - <a href="/driver/{{code}}/{{vp}}">Driver Page</a> <button onclick="shareDriver('{{vp}}','{{van.driver_name}}')" class="btn-blue" style="padding:6px 12px;font-size:12px">📲 Share to Driver</button> <a href="/admin/{{code}}/delete_van/{{vp}}" style="color:red;float:right">Delete Van</a><br>{% for kid_id, kid in school.kids.items() if kid.van_plate==vp %} - {{kid.name}} ({{kid.stage}}) - {{kid.status}} - <a href="/p/{{kid_id}}">View</a> <a href="/admin/{{code}}/delete_kid/{{kid_id}}" style="color:red">Delete</a><br>{% else %}<i>No kids</i><br>{% endfor %}</div>{% endfor %}<script>function shareDriver(plate, driverName){let link=window.location.origin+"/driver/{{code}}/"+plate;let msg="Hello "+driverName+" - your FIKISHA driver link for Van "+plate+": "+link+" - Open daily to update kids";window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");}</script>"""
+ADMIN_HTML = CSS + """<h2>{{school.name}} Admin ({{code}}) - {% if locked %}EXPIRED{% else %}Paid until {{school.paid_until}}{% endif %}</h2><p>Kampala: {{kampala_time}} | DB: {{db_file}}</p><a href="/report/{{code}}">Daily Report</a><div class="card"><h3>Daily Control</h3><form method="post" action="/api/{{code}}/reset_all"><button style="background:#0a7a2a;width:100%">RESET ALL FOR TOMORROW</button></form></div><div class="card"><h3>Add Van</h3><form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form></div><div class="card"><h3>Add Kid to Van</h3><form method="post" action="/admin/{{code}}/add_kid"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form></div><hr><h3>Vans & Kids ({{total_kids}})</h3>{% for vp, van in school.vans.items() %}<div class="card"><b>{{vp}} - {{van.driver_name}} - {{van.driver_phone}}</b> - <a href="/driver/{{code}}/{{vp}}">Driver Page</a> <button onclick="shareDriver('{{vp}}','{{van.driver_name}}')" class="btn-blue" style="padding:6px 12px;font-size:12px">📲 Share to Driver</button> <a href="/admin/{{code}}/delete_van/{{vp}}" style="color:red;float:right">Delete Van</a><br>{% for kid_id, kid in school.kids.items() if kid.van_plate==vp %} - {{kid.name}} ({{kid.stage}}) - {{kid.status}} - <a href="/p/{{kid_id}}">View</a> <a href="/admin/{{code}}/delete_kid/{{kid_id}}" style="color:red">Delete</a><br>{% else %}<i>No kids</i><br>{% endfor %}</div>{% endfor %}<script>function shareDriver(plate, driverName){let link=window.location.origin+"/driver/{{code}}/"+plate;let msg="Hello "+driverName+" - your FIKISHA driver link for Van "+plate+": "+link+" - Open daily to update kids";window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");}</script>"""
 
 @app.route("/admin/<code>")
 def admin(code):
@@ -150,7 +188,7 @@ def admin(code):
         if maybe_auto_reset(kid): changed=True
     if changed: save_db(db)
     from jinja2 import Template
-    return Template(ADMIN_HTML).render(school=school, code=code, locked=is_locked(school), kampala_time=current_time_str(), total_kids=len(school['kids']), db_file=DB_FILE + (" + Supabase" if SUPABASE_URL else ""))
+    return Template(ADMIN_HTML).render(school=school, code=code, locked=is_locked(school), kampala_time=current_time_str(), total_kids=len(school['kids']), db_file="Supabase ✅" if SUPABASE_URL else DB_FILE)
 
 @app.route("/admin/<code>/add_van", methods=["POST"])
 def add_van(code):
@@ -267,7 +305,7 @@ def report(code):
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "schools": len(load_db().get("schools", {})), "supabase": bool(SUPABASE_URL)})
+    return jsonify({"ok": True, "schools": len(load_db().get("schools", {})), "supabase": bool(SUPABASE_URL), "super_protected": True})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

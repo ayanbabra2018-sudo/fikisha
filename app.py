@@ -130,7 +130,7 @@ def home():
         <input type='date' name='paid_until' value='{s.get('paid_until','')}' required style='width:28%'>
         <button style='padding:6px 12px'>Save Edit ✅</button>
         </form>
-        <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Daily</a> | <a href='/report/{code}/weekly'>Weekly Absent</a> | <a href='/super/delete_school/{code}' onclick="return confirm('DELETE {code}? All data lost!')" style='color:red'>Delete ❌</a><br><br>
+        <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Daily</a> | <a href='/report/{code}/weekly'>Weekly Absent</a> | <a href='/super/delete_school/{code}' onclick="return confirm('DELETE {code}?')" style='color:red'>Delete ❌</a><br><br>
         <button onclick="shareAdmin('{code}','{s['name']}','{s.get('director_phone','')}')" class="btn-blue">📲 Share Admin Link</button><br>"""
         for vp, van in s.get('vans', {}).items(): html += f"Van <b>{vp}</b> - {van.get('driver_name','')} ({van.get('driver_phone','')}) PIN:{get_van_pin(van)} - <a href='/driver/{code}/{vp}'>Driver Page</a><br>"
         html += "</div>"
@@ -167,19 +167,15 @@ def delete_school(code):
     db = load_db(); db['schools'].pop(normalize_code(code), None); save_db(db); return redirect("/")
 
 ADMIN_HTML = CSS + """
-{% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1><p>Paid until {{school.paid_until}} | Today {{today}}</p><p>Driver & Admin locked. Super Admin can unlock. Data safe: {{total_kids}} kids.</p></div>{% endif %}
+{% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1><p>Paid until {{school.paid_until}} | Today {{today}}</p><p>Data safe: {{total_kids}} kids.</p></div>{% endif %}
 <h2>{{school.name}} Admin ({{code}}) - {% if locked %}<span style="color:red">EXPIRED</span>{% else %}Active until {{school.paid_until}}{% endif %}</h2>
-<p>Kampala: {{kampala_time}} | {{db_file}} | <a href="/report/{{code}}">Daily Report</a> | <a href="/report/{{code}}/weekly">Weekly Absent Report 📊</a> | <a href="/">Super Admin</a></p>
-
+<p>Kampala: {{kampala_time}} | {{db_file}} | <a href="/report/{{code}}">Daily</a> | <a href="/report/{{code}}/weekly">Weekly Absent 📊</a> | <a href="/">Super Admin</a></p>
 <div class="card"><h3>Daily Control</h3>{% if locked %}<button disabled style="background:#ccc;width:100%">🔒 Locked</button>{% else %}<form method="post" action="/api/{{code}}/reset_all"><button style="background:#0a7a2a;width:100%">RESET ALL FOR TOMORROW</button></form>{% endif %}</div>
-
-<div class="card"><h3>Add Van</h3>{% if locked %}<p style="color:red">🔒 Locked</p>{% else %}<form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button><br><small>PIN will be last 4 digits of driver phone</small></form>{% endif %}</div>
-
+<div class="card"><h3>Add Van</h3>{% if locked %}<p style="color:red">🔒 Locked</p>{% else %}<form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form>{% endif %}</div>
 <div class="card"><h3>Add Kid to Van</h3>{% if locked %}<p style="color:red">🔒 Locked</p>{% elif school.vans|length==0 %}<p style="color:red">Add a Van first!</p>{% else %}<form method="post" action="/admin/{{code}}/add_kid"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form>{% endif %}</div>
-
 <hr><h3>Vans & Kids ({{total_kids}})</h3>
 {% for vp, van in school.vans.items() %}
-<div class="card"><b>{{vp}} - {{van.driver_name}}</b> - {{van.driver_phone}} - PIN: {{van.pin}} - <a href="/driver/{{code}}/{{vp}}">Driver Page (needs PIN)</a><br>
+<div class="card"><b>{{vp}} - {{van.driver_name}}</b> - {{van.driver_phone}} - PIN: {{van.pin}} - <a href="/driver/{{code}}/{{vp}}">Driver Page</a><br>
 {% if not locked %}
 <form method="post" action="/admin/{{code}}/edit_van/{{vp}}" style="background:#FFF8E1;padding:8px;border-radius:8px;margin:8px 0">
 <input name="driver_name" value="{{van.driver_name}}" required style="width:30%"> <input name="driver_phone" value="{{van.driver_phone}}" required style="width:35%"> <button style="padding:6px 10px">Save Van Edit</button> | <a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}?')" style="color:red">Delete Van ❌</a>
@@ -213,7 +209,7 @@ ADMIN_HTML = CSS + """
 <script>
 function shareParent(name,kidId,phone){
  let link=window.location.origin+"/p/"+kidId;
- let msg="Hello, track "+name+" live on FIKISHA: "+link+" - You will also get WhatsApp alerts when picked/dropped.";
+ let msg="Hello, track "+name+" live on FIKISHA: "+link+" - You will also get WhatsApp alerts.";
  let clean=phone.replace(/[^0-9]/g,'');
  window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");
 }
@@ -299,25 +295,25 @@ def reset_all(code):
     for kid in db['schools'][code]['kids'].values(): kid['times']={}; kid['status']="At Home - waiting for van"; kid['absent']=False; kid.pop('dropped_home_ts',None)
     save_db(db); return redirect(f"/admin/{code}")
 
-# DRIVER PIN
-DRIVER_PIN_HTML = CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 Driver PIN for Van {{plate}}</h2><p>Driver: {{van.driver_name}}<br>Enter PIN (last 4 digits of driver phone: {{hint}})</p><form method="post"><input name="pin" type="password" placeholder="4-digit PIN" required style="text-align:center;font-size:20px;letter-spacing:8px" maxlength="4"><br><button style="width:95%">Unlock Driver App</button></form><p style="font-size:12px;color:#666">Ask director for PIN if you forgot</p></div>"""
+# ---- DRIVER PIN ----
+DRIVER_PIN_HTML = CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 Driver PIN for Van {{plate}}</h2><p>Driver: {{van.driver_name}}<br>Enter PIN (last 4 digits of {{van.driver_phone}})</p><form method="post"><input name="pin" type="password" placeholder="4-digit PIN" required style="text-align:center;font-size:22px;letter-spacing:8px" maxlength="4"><br><button style="width:95%">Unlock Driver App</button></form><p style="font-size:12px;color:#666">Ask director for PIN</p></div>"""
 
 DRIVER_HTML = CSS + """<link rel="manifest" href="/manifest.json">
-{% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1><p>Paid until {{school.paid_until}} - Today {{today}}</p><p>Driver cannot use app. Tell director to pay.</p><p>Data SAFE.</p></div>{% endif %}
+{% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1><p>Paid until {{school.paid_until}}</p><p>Driver locked.</p></div>{% endif %}
 <h2>Driver: {{van.driver_name}} - Van {{van.plate}} - {{school.name}} - <a href="/driver/{{code}}/{{van.plate}}/logout" style="font-size:12px">Logout PIN</a></h2>
-<div id="netStatus" style="padding:8px;border-radius:8px;text-align:center;font-weight:bold">Checking network...</div>
-<p>Code: {{code}} | {{kampala_time}} | {{today}} | {{kids|length}} kids | {% if locked %}<span style="color:red">LOCKED</span>{% else %}Active{% endif %}</p>
+<div id="netStatus" style="padding:8px;border-radius:8px;text-align:center;font-weight:bold">Checking...</div>
+<p>Code: {{code}} | {{kampala_time}} | {{today}} | {{kids|length}} kids</p>
 <div style="display:flex;gap:12px;justify-content:space-between;flex-wrap:nowrap">
   <div class="card" style="flex:1;min-width:0;border:2px solid #0a7a2a;background:#e8f5e9;margin:0">
     <h3 style="color:#0a7a2a;margin-top:0;font-size:13px;text-align:center">🏫 Quick Drop</h3>
-    <button class="btn-done" onclick="massDrop('dropped_school')" {% if locked %}disabled style="background:#ccc!important"{% endif %} style="width:100%;font-size:13px;padding:12px;border-radius:12px">🏫 DROP ALL AT SCHOOL</button>
+    <button class="btn-done" onclick="massDrop('dropped_school')" {% if locked %}disabled{% endif %} style="width:100%;font-size:13px;padding:12px;border-radius:12px">🏫 DROP ALL AT SCHOOL</button>
   </div>
   <div style="width:12px;flex-shrink:0"></div>
   <div class="card" style="flex:1;min-width:0;border:2px solid #d32f2f;margin:0">
     <h3 style="color:#d32f2f;margin-top:0;font-size:13px;text-align:center">🚨 Alert All</h3>
     <select id="trafficReason" {% if locked %}disabled{% endif %} style="width:100%;padding:8px;border:2px solid #d32f2f;font-size:11px"><option value="Heavy traffic - 15 mins late">Traffic - 15 mins late</option><option value="Heavy traffic - 30 mins late">Traffic - 30 mins late</option><option value="Tyre puncture - fixing, 20 mins delay">Puncture - 20 mins</option><option value="Fuel stop - 10 mins delay">Fuel - 10 mins</option><option value="custom">✏️ Custom</option></select>
     <input id="trafficCustom" placeholder="Custom 80 chars" style="width:95%;display:none;margin-top:6px" maxlength="80">
-    <button class="btn-red" onclick="sendTraffic()" {% if locked %}disabled style="background:#ccc"{% endif %} style="width:100%;margin-top:8px;padding:10px;font-size:12px">🚨 SEND ALERT</button>
+    <button class="btn-red" onclick="sendTraffic()" {% if locked %}disabled{% endif %} style="width:100%;margin-top:8px;padding:10px;font-size:12px">🚨 SEND ALERT</button>
   </div>
 </div>
 <hr><div class="grid">{% for kid_id, kid in kids.items() %}<div class="card"><b>{{kid.name}}</b> - {{kid.stage}} - {{kid.parent_phone}}<br>Status: <span class="badge">{{kid.status}}</span><div class="progress"><div class="progress-fill" style="width: {{kid.progress}}%"></div></div><br><button onclick="action('{{kid.id}}','picked_home')" {% if locked %}disabled{% endif %}>PICKED HOME</button><button onclick="action('{{kid.id}}','dropped_school')" {% if locked %}disabled{% endif %}>DROPPED SCHOOL</button><button onclick="action('{{kid.id}}','picked_school')" {% if locked %}disabled{% endif %}>PICKED SCHOOL</button><button onclick="action('{{kid.id}}','dropped_home')" {% if locked %}disabled{% endif %}>DROPPED HOME</button><br><button class="btn-orange" onclick="action('{{kid.id}}','absent')" {% if locked %}disabled{% endif %}>ABSENT</button><button class="btn-grey" onclick="action('{{kid.id}}','present')" {% if locked %}disabled{% endif %}>BACK</button></div>{% endfor %}</div>
@@ -327,7 +323,7 @@ let queue = JSON.parse(localStorage.getItem('fikisha_queue_{{van.plate}}')||'[]'
 if(queue.length>100){ queue=queue.slice(-100); localStorage.setItem('fikisha_queue_{{van.plate}}', JSON.stringify(queue)); }
 function updateNet(){
   let el=document.getElementById('netStatus');
-  if(navigator.onLine){ el.innerText='✅ ONLINE - {% if locked %}LOCKED{% else %}Live{% endif %} | Queued: '+queue.length; el.style.background='#e8f5e9'; if(queue.length>0) syncQueue(); }
+  if(navigator.onLine){ el.innerText='✅ ONLINE | Queued: '+queue.length; el.style.background='#e8f5e9'; if(queue.length>0) syncQueue(); }
   else { el.innerText='⚠️ OFFLINE - saved | Queued: '+queue.length; el.style.background='#fff3cd'; }
 }
 window.addEventListener('online', updateNet); window.addEventListener('offline', updateNet); updateNet();
@@ -364,10 +360,10 @@ def driver_page(code, plate):
                 return resp
             else:
                 from jinja2 import Template
-                return Template(CSS + DRIVER_PIN_HTML + "<p style='color:red;text-align:center'>Wrong PIN! Try again</p>").render(van=van, plate=plate_norm, hint="****"+real_pin[-2:])
+                return Template(CSS + DRIVER_PIN_HTML + "<p style='color:red;text-align:center'>Wrong PIN!</p>").render(van=van, plate=plate_norm)
         if cookie_pin!= real_pin:
             from jinja2 import Template
-            return Template(CSS + DRIVER_PIN_HTML).render(van=van, plate=plate_norm, hint="****"+real_pin[-2:] if len(real_pin)==4 else "***")
+            return Template(CSS + DRIVER_PIN_HTML).render(van=van, plate=plate_norm)
         locked = is_locked(school); changed=False
         for k in school['kids'].values():
             if k['van_plate']==plate_norm and maybe_auto_reset(k): changed=True
@@ -398,8 +394,7 @@ def driver_action(code, plate):
         school = db['schools'].get(code)
         if not school: return jsonify({"ok": False, "error":"school deleted"}), 404
         if is_locked(school): return jsonify({"ok": False, "locked": True, "error":"Payment expired"}), 403
-        cookie_pin = request.cookies.get(f"driver_pin_{plate_norm}")
-        van = school['vans'].get(plate_norm)
+        cookie_pin = request.cookies.get(f"driver_pin_{plate_norm}"); van = school['vans'].get(plate_norm)
         if not van or cookie_pin!= get_van_pin(van): return jsonify({"ok": False, "error":"PIN required"}), 401
         data = request.get_json() or {}; kid_id = data.get('kid_id'); act = data.get('action')
         if not kid_id or not act: return jsonify({"ok": False}), 400
@@ -408,25 +403,23 @@ def driver_action(code, plate):
         log = school.get('attendance_log', [])
         if act == 'picked_home':
             kid['status']=f"On way to School - picked at {short}"; kid['times']['picked_home']=full; kid['absent']=False
-            whatsapp_async(kid['parent_phone'], "picked_home", [kid['name'], short, plate_norm]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "picked_home", "time": full})
+            whatsapp_async(kid['parent_phone'], "picked_home", [kid['name'], short, plate_norm]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "picked_home", "time": full, "van": plate_norm})
         elif act == 'dropped_school':
             kid['status']=f"At School - arrived at {short}"; kid['times']['dropped_school']=full
-            whatsapp_async(kid['parent_phone'], "dropped_school", [kid['name'], short]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_school", "time": full})
+            whatsapp_async(kid['parent_phone'], "dropped_school", [kid['name'], short]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_school", "time": full, "van": plate_norm})
         elif act == 'picked_school':
             kid['status']=f"On way Home - left at {short}"; kid['times']['picked_school']=full
-            whatsapp_async(kid['parent_phone'], "picked_school", [kid['name'], short, plate_norm]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "picked_school", "time": full})
+            whatsapp_async(kid['parent_phone'], "picked_school", [kid['name'], short, plate_norm]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "picked_school", "time": full, "van": plate_norm})
         elif act == 'dropped_home':
             kid['status']=f"Home Safe - {short}"; kid['times']['dropped_home']=full; kid['dropped_home_ts']=kampala_now().isoformat()
-            whatsapp_async(kid['parent_phone'], "dropped_home", [kid['name'], short]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_home", "time": full})
+            whatsapp_async(kid['parent_phone'], "dropped_home", [kid['name'], short]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_home", "time": full, "van": plate_norm})
         elif act == 'absent':
             kid['status']="ABSENT Today"; kid['absent']=True
-            whatsapp_async(kid['parent_phone'], "absent", [kid['name'], str(date.today()), plate_norm]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "ABSENT", "time": full})
+            whatsapp_async(kid['parent_phone'], "absent", [kid['name'], str(date.today()), plate_norm]); log.append({"date": str(date.today()), "kid": kid['name'], "action": "ABSENT", "time": full, "van": plate_norm})
         elif act == 'present':
-            kid['absent']=False; kid['status']="At Home - waiting for van"; kid['times']={}; kid.pop('dropped_home_ts',None); log.append({"date": str(date.today()), "kid": kid['name'], "action": "PRESENT", "time": full})
+            kid['absent']=False; kid['status']="At Home - waiting for van"; kid['times']={}; kid.pop('dropped_home_ts',None); log.append({"date": str(date.today()), "kid": kid['name'], "action": "PRESENT", "time": full, "van": plate_norm})
         else: return jsonify({"ok": False}), 400
-        if len(log)>500: log=log[-500:]
-        school['attendance_log']=log
-        save_db(db); return jsonify({"ok": True})
+        school['attendance_log']=log[-500:]; save_db(db); return jsonify({"ok": True})
     except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/<code>/<plate>/mass", methods=["POST"])
@@ -434,8 +427,7 @@ def mass_action(code, plate):
     try:
         db = load_db(); code = normalize_code(code); plate_norm = normalize_plate(plate)
         school = db['schools'].get(code)
-        if not school: return jsonify({"ok": False}), 404
-        if is_locked(school): return jsonify({"locked": True}), 403
+        if not school or is_locked(school): return jsonify({"locked": True}), 403
         cookie_pin = request.cookies.get(f"driver_pin_{plate_norm}"); van = school['vans'].get(plate_norm)
         if not van or cookie_pin!= get_van_pin(van): return jsonify({"ok": False, "error":"PIN"}), 401
         data = request.get_json() or {}; act = data.get('action',''); short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b"); count = 0; log=school.get('attendance_log',[])
@@ -443,7 +435,7 @@ def mass_action(code, plate):
             for kid in [k for k in school['kids'].values() if k.get('van_plate')==plate_norm and not k.get('absent')]:
                 if 'dropped_school' in kid.get('times',{}): continue
                 kid['status']=f"At School - arrived at {short}"; kid['times']['dropped_school']=full
-                whatsapp_async(kid['parent_phone'], "dropped_school", [kid['name'], short]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_school (mass)", "time": full})
+                whatsapp_async(kid['parent_phone'], "dropped_school", [kid['name'], short]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_school (mass)", "time": full, "van": plate_norm})
             school['attendance_log']=log[-500:]; save_db(db); return jsonify({"ok": True, "count": count})
         return jsonify({"ok": False}), 400
     except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
@@ -481,98 +473,172 @@ def bulk_sync(code, plate):
             kid=school['kids'][kid_id]
             if act=='picked_home':
                 kid['status']=f"On way to School - picked at {short}"; kid['times']['picked_home']=full; kid['absent']=False
-                whatsapp_async(kid['parent_phone'], "picked_home", [kid['name'], short, plate_norm]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "picked_home", "time": full})
+                whatsapp_async(kid['parent_phone'], "picked_home", [kid['name'], short, plate_norm]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "picked_home", "time": full, "van": plate_norm})
             elif act=='dropped_school':
                 kid['status']=f"At School - arrived at {short}"; kid['times']['dropped_school']=full
-                whatsapp_async(kid['parent_phone'], "dropped_school", [kid['name'], short]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_school", "time": full})
+                whatsapp_async(kid['parent_phone'], "dropped_school", [kid['name'], short]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_school", "time": full, "van": plate_norm})
             elif act=='picked_school':
                 kid['status']=f"On way Home - left at {short}"; kid['times']['picked_school']=full
-                whatsapp_async(kid['parent_phone'], "picked_school", [kid['name'], short, plate_norm]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "picked_school", "time": full})
+                whatsapp_async(kid['parent_phone'], "picked_school", [kid['name'], short, plate_norm]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "picked_school", "time": full, "van": plate_norm})
             elif act=='dropped_home':
                 kid['status']=f"Home Safe - {short}"; kid['times']['dropped_home']=full; kid['dropped_home_ts']=kampala_now().isoformat()
-                whatsapp_async(kid['parent_phone'], "dropped_home", [kid['name'], short]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_home", "time": full})
+                whatsapp_async(kid['parent_phone'], "dropped_home", [kid['name'], short]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "dropped_home", "time": full, "van": plate_norm})
             elif act=='absent':
                 kid['status']="ABSENT Today"; kid['absent']=True
-                whatsapp_async(kid['parent_phone'], "absent", [kid['name'], str(date.today()), plate_norm]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "ABSENT", "time": full})
+                whatsapp_async(kid['parent_phone'], "absent", [kid['name'], str(date.today()), plate_norm]); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "ABSENT", "time": full, "van": plate_norm})
             elif act=='present':
-                kid['absent']=False; kid['status']="At Home - waiting for van"; kid['times']={}; kid.pop('dropped_home_ts',None); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "PRESENT", "time": full})
+                kid['absent']=False; kid['status']="At Home - waiting for van"; kid['times']={}; kid.pop('dropped_home_ts',None); count+=1; log.append({"date": str(date.today()), "kid": kid['name'], "action": "PRESENT", "time": full, "van": plate_norm})
         school['attendance_log']=log[-500:]; save_db(db)
         return jsonify({"ok": True, "count": count})
     except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
+# ========== BEAUTIFIED PARENT PAGE (YOUR CODE IMPROVED) ==========
 @app.route("/p/<kid_id>")
 def parent_view(kid_id):
-    try:
-        db = load_db()
-        for code, school in db['schools'].items():
-            if kid_id in school['kids']:
-                kid = school['kids'][kid_id]
-                if maybe_auto_reset(kid): save_db(db)
-                van = school['vans'].get(kid['van_plate'], {"driver_name":"Unknown"})
-                timeline = "<br>".join([f"- {k}: {v}" for k,v in kid.get('times',{}).items()]) or "Waiting for van..."
-                return CSS + f"<div class='card' style='max-width:500px;margin:auto'><h2>👦 {kid['name']} - {school['name']}</h2>Stage: {kid.get('stage','')}<br>Van: {kid['van_plate']} Driver {van.get('driver_name','')}<br><h3>Status: {kid['status']}</h3><b>Today Timeline:</b><br>{timeline}<br><br><i>Live {current_time_str()} - Updates via WhatsApp</i><br><br><a href='https://wa.me/{to_wa(school.get('director_phone',''))}?text=About {kid['name']}'>Contact School</a></div>"
-        return CSS + "<div class='card' style='background:#ffcccc'><h2>Kid not found - maybe deleted</h2></div>"
-    except Exception as e: return f"Error: {e}"
+    db = load_db()
+    for code, school in db['schools'].items():
+        if kid_id in school['kids']:
+            if is_locked(school):
+                return CSS + "<div class='card' style='background:#ffcccc;text-align:center;max-width:500px;margin:50px auto'><h2>🔒 Service Paused</h2><p>Contact school admin.<br>Subscription ended on "+school.get('paid_until','')+"</p></div>"
+            kid = school['kids'][kid_id]
+            van = school['vans'].get(kid['van_plate'], {})
+            if maybe_auto_reset(kid): save_db(db)
 
-@app.route("/report/<code>")
-def report(code):
-    try:
-        db = load_db(); code = normalize_code(code); school = db['schools'].get(code)
-        if not school: return CSS + "<div class='card'><h2>School Deleted</h2></div>"
-        today = str(date.today()); kids = list(school['kids'].values())
-        total = len(kids); picked_home = sum(1 for k in kids if 'picked_home' in k.get('times',{})); dropped_school = sum(1 for k in kids if 'dropped_school' in k.get('times',{})); dropped_home = sum(1 for k in kids if 'dropped_home' in k.get('times',{})); absent = sum(1 for k in kids if k.get('absent'))
-        html = CSS + f"""<div class='no-print'><a href="/report/{code}/csv"><button class="btn-blue">📥 CSV Daily</button></a> <a href="/report/{code}/weekly"><button class="btn-orange">📊 Weekly Absent</button></a> <a href="/admin/{code}"><button>Back</button></a></div><div class='card'><h2>📊 Daily Report - {school['name']} - {'🔴 EXPIRED' if is_locked(school) else '🟢 Active'}</h2><p>{today} | {current_time_str()} | Paid: {school.get('paid_until','')}</p><p>Total:{total} Picked:{picked_home} School:{dropped_school} Home:{dropped_home} Absent:{absent}</p></div><div class='card'><table><tr><th>Kid</th><th>Van</th><th>Status</th><th>Parent</th><th>Parent Link</th></tr>"""
-        for k in kids: html += f"<tr><td>{k.get('name','')}</td><td>{k.get('van_plate','')}</td><td>{k.get('status','')}</td><td>{k.get('parent_phone','')}</td><td><a href='/p/{k.get('id','')}' target='_blank'>View</a></td></tr>"
-        html += "</table></div>"; return html
-    except Exception as e: return f"Report error: {e}"
+            times = kid.get('times', {})
+            steps = [
+                ("picked_home", "🏠 Picked Home", "On the road to school"),
+                ("dropped_school", "🏫 Dropped School", "Safe at school"),
+                ("picked_school", "🚐 Picked School", "Heading home"),
+                ("dropped_home", "✅ Dropped Home", "Home safe")
+            ]
+            progress = len(times) * 25
+            timeline_html = ""
+            for key, label, sub in steps:
+                done = key in times
+                icon = "✅" if done else "⭕"
+                t = times.get(key, "— waiting")
+                timeline_html += f"<div style='display:flex;gap:14px;margin:16px 0;opacity:{1 if done else 0.45};align-items:center'><div style='font-size:26px;width:32px;text-align:center'>{icon}</div><div><b style='font-size:15px'>{label}</b><br><small style='color:#555'>{t} — {sub}</small></div></div>"
 
+            status_color = "#0a7a2a" if "Home Safe" in kid['status'] else "#0D2A54"
+            status_emoji = "✅" if progress>=100 else "👦"
+
+            return f"""
+{CSS}
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<div style="max-width:500px;margin:0 auto">
+  <div style="text-align:center;padding:12px">
+    <h2 style="margin:5px;letter-spacing:1px">🚐 FIKISHA</h2>
+    <small style="color:#666">{school['name']} | Van {kid['van_plate']} | {current_time_str()}</small>
+  </div>
+  <div class="card" style="border-top:7px solid {status_color};text-align:center;border-radius:20px">
+    <div style="font-size:56px">{status_emoji}</div>
+    <h2 style="border:none;margin:12px 0;font-size:22px">{kid['name']}</h2>
+    <small style="color:#666">Stage {kid.get('stage','')} | ID {kid['id']}</small><br><br>
+    <span class="badge" style="background:{status_color};font-size:14px;padding:10px 18px;border-radius:30px">{kid['status']}</span>
+    <div class="progress" style="height:16px;margin:22px 0;border-radius:20px"><div class="progress-fill" style="width:{progress}%"></div></div>
+    <small style="color:#333"><b>{progress}% Complete today</b> — Auto-updates every 30 sec</small>
+  </div>
+
+  <div class="card" style="border-radius:20px">
+    <h3 style="margin-top:0">🛣️ Live Journey</h3>
+    {timeline_html}
+  </div>
+
+  <div class="card" style="display:flex;gap:10px;border-radius:16px;padding:14px">
+    <a href="tel:{van.get('driver_phone','')}" style="flex:1;text-align:center;background:#0D2A54;color:#FFC107;padding:14px;border-radius:12px;text-decoration:none;font-weight:bold">📞 Call Driver<br><small style="color:#FFC107">{van.get('driver_name','Driver')}</small></a>
+    <a href="https://wa.me/{to_wa(van.get('driver_phone',''))}?text=Hello {van.get('driver_name','')} about {kid['name']} ({kid['van_plate']}) - {kid['status']}" style="flex:1;text-align:center;background:#25D366;color:white;padding:14px;border-radius:12px;text-decoration:none;font-weight:bold">💬 WhatsApp<br><small>Driver</small></a>
+  </div>
+
+  <div class="card" style="background:#FFF8E1;text-align:center;border-radius:16px">
+    <small style="color:#555">Van {kid['van_plate']} | Driver {van.get('driver_name','')} | {van.get('driver_phone','')}<br>
+    Share this live page: <b>{kid_id}</b> | <a href="https://wa.me/{to_wa(kid['parent_phone'],'')}?text=Track {kid['name']} live: https://YOUR-DOMAIN/p/{kid_id}">Share to Parent</a></small>
+  </div>
+</div>
+"""
+    return CSS + "<div class='card' style='max-width:500px;margin:50px auto;text-align:center'><h2>🔍 Kid not found</h2><p>Link may be old or kid was deleted by admin.</p><small>Ask school for new parent link</small></div>"
+
+# ========== BEAUTIFIED WEEKLY REPORT WITH EXPORT ==========
 @app.route("/report/<code>/weekly")
 def weekly_report(code):
     try:
         db = load_db(); code = normalize_code(code); school = db['schools'].get(code)
-        if not school: return CSS + "<div class='card'><h2>School Deleted</h2></div>"
-        log = school.get('attendance_log', [])
-        # last 7 days
-        today = date.today()
-        dates = [(today - timedelta(days=i)).isoformat() for i in range(7)]
-        html = CSS + f"<div class='no-print'><a href='/admin/{code}'><button>Back to Admin</button></a> <a href='/report/{code}/weekly/csv'><button class='btn-blue'>📥 CSV Weekly</button></a></div>"
-        html += f"<div class='card'><h2>📊 Weekly Absent Report - {school['name']}</h2><p>Last 7 days: {dates[-1]} to {dates[0]}</p></div>"
-        # count absent per day
-        from collections import defaultdict
-        absent_by_date = defaultdict(list)
-        for entry in log:
-            if 'ABSENT' in entry.get('action',''):
-                absent_by_date[entry.get('date')].append(entry.get('kid'))
-        html += "<div class='card'><h3>Absent Summary (7 days)</h3><table><tr><th>Date</th><th>Absent Count</th><th>Kids</th></tr>"
-        for d in dates:
-            kids_absent = absent_by_date.get(d, [])
-            html += f"<tr><td>{d}</td><td>{len(kids_absent)}</td><td>{', '.join(kids_absent) or 'None'}</td></tr>"
+        if not school: return CSS + "<div class='card'><h2>No school</h2></div>"
+        kids = list(school['kids'].values())
+        total = len(kids)
+        absent_today = sum(1 for k in kids if k.get('absent'))
+        not_picked = [k for k in kids if not k.get('times') and not k.get('absent')]
+        picked_home = sum(1 for k in kids if 'picked_home' in k.get('times',{}))
+
+        html = CSS + f"""
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <a href="/admin/{code}"><button>⬅️ Back Admin</button></a>
+        <a href="/report/{code}"><button class="btn-grey">📊 Daily Report</button></a>
+        <a href="/report/{code}/weekly/csv"><button class="btn-blue">📥 Export Weekly CSV</button></a>
+        <a href="/report/{code}/csv"><button class="btn-orange">📥 Export Daily CSV</button></a>
+        </div>
+        <h2>📊 Weekly & Daily Overview — {school['name']} ({code}) - {current_time_str()}</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div class="card" style="text-align:center;border-top-color:#0a7a2a"><h3 style="margin:0">{total}</h3><small>Total Kids</small></div>
+          <div class="card" style="text-align:center;border-top-color:#0a7a2a"><h3 style="margin:0">{picked_home}</h3><small>Picked Today</small></div>
+          <div class="card" style="text-align:center;border-top-color:#d32f2f"><h3 style="margin:0">{absent_today}</h3><small>Absent Today</small></div>
+        </div>
+        <div class="card"><b>⏳ Not yet picked today ({len(not_picked)}):</b> {', '.join([k['name'] for k in not_picked]) or 'All picked ✅'}</div>
+        <div class="card">
+        <h3>All Kids — Status Today</h3>
+        <table><tr><th>Kid</th><th>Van</th><th>Status</th><th>Times</th><th>Parent Link</th></tr>
+        """
+        for kid in kids:
+            absent_flag = "🚫 ABSENT" if kid.get('absent') else "✅ Present"
+            times = kid.get('times',{})
+            times_str = "<br>".join([f"<small>{k}: {v}</small>" for k,v in times.items()]) or "<small style='color:#999'>Not started</small>"
+            html += f"<tr><td><b>{kid['name']}</b><br><small>{kid['stage']} | {kid['id']}</small></td><td>{kid['van_plate']}</td><td>{absent_flag}<br><small>{kid['status'][:30]}</small></td><td>{times_str}</td><td><a href='/p/{kid['id']}' target='_blank'>View</a></td></tr>"
         html += "</table></div>"
-        html += "<div class='card'><h3>Full Log (last 200)</h3><table><tr><th>Date</th><th>Kid</th><th>Action</th><th>Time</th></tr>"
-        for entry in log[-200:][::-1]:
-            html += f"<tr><td>{entry.get('date','')}</td><td>{entry.get('kid','')}</td><td>{entry.get('action','')}</td><td>{entry.get('time','')}</td></tr>"
-        html += "</table></div>"
+
+        # attendance log last 200
+        log = school.get('attendance_log', [])[-200:][::-1]
+        if log:
+            html += "<div class='card'><h3>Recent Activity Log (last 200)</h3><table><tr><th>Date</th><th>Time</th><th>Kid</th><th>Van</th><th>Action</th></tr>"
+            for e in log:
+                html += f"<tr><td>{e.get('date','')}</td><td><small>{e.get('time','')}</small></td><td>{e.get('kid','')}</td><td>{e.get('van','')}</td><td>{e.get('action','')}</td></tr>"
+            html += "</table></div>"
         return html
-    except Exception as e: return f"Weekly report error: {e}"
+    except Exception as e:
+        return f"Weekly report error: {e}"
 
 @app.route("/report/<code>/csv")
-def report_csv(code):
+def export_csv_daily(code):
     db = load_db(); code = normalize_code(code); school = db['schools'].get(code)
     if not school: return "No school"
-    output = io.StringIO(); writer = csv.writer(output)
-    writer.writerow(["Kid","Stage","Van","Parent","Status","Picked Home","Dropped School","Picked School","Dropped Home","Absent"])
-    for k in school['kids'].values(): writer.writerow([k.get('name',''),k.get('stage',''),k.get('van_plate',''),k.get('parent_phone',''),k.get('status',''),k.get('times',{}).get('picked_home',''),k.get('times',{}).get('dropped_school',''),k.get('times',{}).get('picked_school',''),k.get('times',{}).get('dropped_home',''),k.get('absent',False)])
-    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename=report_{code}_{date.today()}.csv"})
+    si = io.StringIO(); cw = csv.writer(si)
+    cw.writerow(["Kid ID","Name","Stage","Van","Parent Phone","Status","Absent","Picked Home","Dropped School","Picked School","Dropped Home","Report Time"])
+    for kid in school['kids'].values():
+        t = kid.get('times',{})
+        cw.writerow([kid['id'],kid['name'],kid['stage'],kid['van_plate'],kid['parent_phone'],kid['status'],kid.get('absent',False),t.get('picked_home',''),t.get('dropped_school',''),t.get('picked_school',''),t.get('dropped_home',''),current_time_str()])
+    output = make_response(si.getvalue())
+    output.headers["Content-Disposition"] = f"attachment; filename=FIKISHA_DAILY_{code}_{date.today()}.csv"
+    output.headers["Content-type"] = "text/csv"
+    return output
 
 @app.route("/report/<code>/weekly/csv")
-def weekly_csv(code):
+def export_csv_weekly(code):
     db = load_db(); code = normalize_code(code); school = db['schools'].get(code)
     if not school: return "No school"
-    output = io.StringIO(); writer = csv.writer(output)
-    writer.writerow(["Date","Kid","Action","Time"])
-    for entry in school.get('attendance_log', []):
-        writer.writerow([entry.get('date',''), entry.get('kid',''), entry.get('action',''), entry.get('time','')])
-    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename=weekly_{code}_{date.today()}.csv"})
+    si = io.StringIO(); cw = csv.writer(si)
+    cw.writerow(["Date","Time","Kid Name","Van","Action"])
+    for e in school.get('attendance_log', []):
+        cw.writerow([e.get('date',''), e.get('time',''), e.get('kid',''), e.get('van',''), e.get('action','')])
+    # also add current snapshot
+    cw.writerow([])
+    cw.writerow(["--- CURRENT SNAPSHOT ---"])
+    cw.writerow(["Kid ID","Name","Stage","Van","Parent Phone","Status","Absent"])
+    for kid in school['kids'].values():
+        cw.writerow([kid['id'],kid['name'],kid['stage'],kid['van_plate'],kid['parent_phone'],kid['status'],kid.get('absent',False)])
+    output = make_response(si.getvalue())
+    output.headers["Content-Disposition"] = f"attachment; filename=FIKISHA_WEEKLY_{code}_{date.today()}.csv"
+    output.headers["Content-type"] = "text/csv"
+    return output
 
 @app.route("/manifest.json")
 def manifest(): return jsonify({"name": "FIKISHA Driver","short_name": "FIKISHA","start_url": "/","display": "standalone","background_color": "#FFF8E1","theme_color": "#0D2A54"})

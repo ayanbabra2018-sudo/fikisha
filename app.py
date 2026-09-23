@@ -33,8 +33,7 @@ def load_db():
             r = requests.get(url, headers=headers, timeout=10)
             if r.status_code == 200 and r.json():
                 data = r.json()[0]['data']
-                if "schools" in data:
-                    return data
+                if "schools" in data: return data
         except Exception as e:
             print(f"Supabase load failed: {e}")
     for path in [DB_FILE, BACKUP_FILE]:
@@ -42,8 +41,7 @@ def load_db():
             try:
                 with open(path, 'r') as f:
                     data = json.load(f)
-                    if "schools" in data:
-                        return data
+                    if "schools" in data: return data
             except: pass
     return {"schools": {}}
 
@@ -95,21 +93,18 @@ def is_locked(school):
     try: return school['paid_until'] < str(date.today())
     except: return True
 
-# --- BULLETPROOF 2-HOUR RESET ---
+# BULLETPROOF 2-HOUR RESET
 def maybe_auto_reset(kid):
     ts = kid.get('dropped_home_ts')
-    if not ts or 'dropped_home' not in kid.get('times', {}):
-        return False
+    if not ts or 'dropped_home' not in kid.get('times', {}): return False
     try:
         dropped_time = datetime.fromisoformat(ts)
         now = kampala_now()
-        # make both same type (both aware or both naive)
         if dropped_time.tzinfo is None:
             now_cmp = now.replace(tzinfo=None) if now.tzinfo else now
         else:
             now_cmp = now if now.tzinfo else (now.replace(tzinfo=KAMPALA_TZ) if KAMPALA_TZ else now)
             if now_cmp.tzinfo is None and dropped_time.tzinfo:
-                # force dropped to naive if we can't make now aware
                 dropped_time = dropped_time.replace(tzinfo=None)
         diff = now_cmp - dropped_time
         if diff > timedelta(hours=2):
@@ -120,7 +115,6 @@ def maybe_auto_reset(kid):
             return True
     except Exception as e:
         print(f"reset error: {e}")
-        pass
     return False
 
 CSS = """<style>body{font-family:system-ui,Arial;background:#FFF8E1;margin:0;padding:15px;color:#1a1a1a}h2{color:#0D2A54;border-bottom:3px solid #FFC107;padding-bottom:8px}.card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 4px 14px rgba(0,0,0,0.1);border-top:5px solid #FFC107}input,select{padding:11px;border-radius:10px;border:2px solid #FFC107;margin:6px;width:90%}button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px}.btn-done{background:#0a7a2a!important;color:white!important}.btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}.btn-grey{background:#888;color:white}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}}.badge{padding:6px 12px;border-radius:20px;background:#0D2A54;color:#FFC107}.progress{height:10px;background:#eee;border-radius:10px;overflow:hidden}.progress-fill{height:100%;background:linear-gradient(90deg,#0a7a2a,#FFC107)}a{color:#1565c0;font-weight:bold;text-decoration:none}table{width:100%;border-collapse:collapse}th,td{padding:8px;text-align:left;border-bottom:1px solid #eee}@media print{button,.no-print{display:none}}</style>"""
@@ -137,7 +131,7 @@ def home():
             return CSS + "<div class='card' style='background:#ffcccc'><h2>Wrong password</h2><a href='/'>Try again</a></div>"
     auth = request.cookies.get("super_auth")
     if auth!= SUPER_ADMIN_PASSWORD:
-        return CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 FIKISHA Super Admin</h2><form method="post"><input name="password" type="password" placeholder="Password" required style="width:90%"><br><button style="width:95%;margin-top:10px">Unlock</button></form><p style="font-size:11px;color:#888">Default: fikisha2026</p></div>"""
+        return CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 FIKISHA Super Admin</h2><form method="post"><input name="password" type="password" placeholder="Password" required style="width:90%"><br><button style="width:95%;margin-top:10px">Unlock</button></form><p style="font-size:11px;color:#888">Default: fikisha2026 - change in Render env</p></div>"""
     db = load_db()
     html = CSS + f"<h2>FIKISHA - Super Admin (Kampala: {current_time_str()}) | {'Supabase ✅' if SUPABASE_URL else 'Local'}</h2>"
     html += """<div class="card"><h3>Create New School</h3><form method="post" action="/create_school"><input name="school_name" placeholder="Bright Angels" required><input name="code" placeholder="Code BRIGHT123" required><input name="director" placeholder="Director WhatsApp 2567..." required><input name="paid_until" type="date" required><button>Add School +</button></form></div><hr>"""
@@ -199,7 +193,7 @@ def add_kid(code):
     van_plate = normalize_plate(request.form['van_plate'])
     if van_plate not in db['schools'][code]['vans']: return f"Van {van_plate} not found! <a href='/admin/{code}'>Back</a>"
     db['schools'][code]['kids'][kid_id] = {"id": kid_id,"name": request.form['kid_name'],"stage": request.form['stage'],"parent_phone": request.form['parent_phone'],"van_plate": van_plate,"status": "At Home - waiting for van","times": {},"absent": False}
-    save_db(db); whatsapp_template(request.form['parent_phone'], "picked_home", [request.form['kid_name'], current_time_str(), van_plate])
+    save_db(db)
     return redirect(f"/admin/{code}")
 
 @app.route("/api/<code>/reset_all", methods=["POST"])
@@ -241,6 +235,7 @@ def driver_action(code, plate):
     data = request.get_json(); kid_id = data['kid_id']; act = data['action']
     kid = db['schools'][code]['kids'][kid_id]
     short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b")
+
     if act == 'picked_home':
         kid['status']=f"On way to School - picked at {short}"; kid['times']['picked_home']=full; kid['absent']=False
         whatsapp_template(kid['parent_phone'], "picked_home", [kid['name'], short, plate_norm])
@@ -253,8 +248,13 @@ def driver_action(code, plate):
     elif act == 'dropped_home':
         kid['status']=f"Home Safe - {short}"; kid['times']['dropped_home']=full; kid['dropped_home_ts']=kampala_now().isoformat()
         whatsapp_template(kid['parent_phone'], "dropped_home", [kid['name'], short])
-    elif act == 'absent': kid['status']="ABSENT Today"; kid['absent']=True
-    elif act == 'present': kid['absent']=False; kid['status']="At Home - waiting for van"; kid['times']={}; kid.pop('dropped_home_ts',None)
+    elif act == 'absent':
+        kid['status']="ABSENT Today"; kid['absent']=True
+        # OWN MESSAGE - ABSENT
+        whatsapp_template(kid['parent_phone'], "absent", [kid['name'], str(date.today()), plate_norm])
+    elif act == 'present':
+        kid['absent']=False; kid['status']="At Home - waiting for van"; kid['times']={}; kid.pop('dropped_home_ts',None)
+
     save_db(db); return jsonify({"ok": True})
 
 @app.route("/api/<code>/<plate>/traffic", methods=["POST"])
@@ -326,7 +326,7 @@ def report_csv(code):
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "schools": len(load_db().get("schools", {})), "supabase": bool(SUPABASE_URL), "reset_fixed": True})
+    return jsonify({"ok": True, "schools": len(load_db().get("schools", {})), "supabase": bool(SUPABASE_URL)})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

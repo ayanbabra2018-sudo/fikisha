@@ -1,8 +1,7 @@
-from flask import Flask, request, redirect, jsonify
-import json, os, requests
+from flask import Flask, request, redirect, jsonify, Response
+import json, os, requests, csv, io
 from datetime import datetime, date, timedelta
 
-# --- KAMPALA TIMEZONE FIX ---
 try:
     from zoneinfo import ZoneInfo
     KAMPALA_TZ = ZoneInfo("Africa/Kampala")
@@ -16,7 +15,6 @@ def kampala_now():
 
 def normalize_plate(p):
     return str(p).upper().strip().replace(" ", "") if p else ""
-
 def normalize_code(p):
     return str(p).upper().strip().replace(" ", "") if p else ""
 
@@ -54,33 +52,9 @@ def whatsapp_template(to, template_name, params=[]):
     url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     body_params = [{"type": "text", "text": str(p)} for p in params]
-    data = {
-        "messaging_product": "whatsapp",
-        "to": clean,
-        "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {"code": "en_US"},
-            "components": [{"type": "body", "parameters": body_params}] if body_params else []
-        }
-    }
+    data = {"messaging_product": "whatsapp","to": clean,"type": "template","template": {"name": template_name,"language": {"code": "en_US"},"components": [{"type": "body", "parameters": body_params}] if body_params else []}}
     try:
         r = requests.post(url, headers=headers, json=data, timeout=15)
-        print(f"WA {template_name} to {clean}: {r.status_code}")
-        return r.status_code == 200, r.text
-    except Exception as e:
-        return False, str(e)
-
-def whatsapp_text(to, msg):
-    token = os.environ.get("WHATSAPP_TOKEN")
-    phone_id = os.environ.get("WHATSAPP_PHONE_ID", "1327812003752192")
-    if not token: return False, "no token"
-    clean = to_wa(to)
-    url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp","to": clean,"type": "text","text": {"body": msg}}
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=15)
         return r.status_code == 200, r.text
     except Exception as e:
         return False, str(e)
@@ -105,7 +79,7 @@ def maybe_auto_reset(kid):
     except: pass
     return False
 
-CSS = """<style>body{font-family:system-ui,Arial;background:#FFF8E1;margin:0;padding:15px;color:#1a1a1a}h2{color:#0D2A54;border-bottom:3px solid #FFC107;padding-bottom:8px}.card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 4px 14px rgba(0,0,0,0.1);border-top:5px solid #FFC107}input,select{padding:11px;border-radius:10px;border:2px solid #FFC107;margin:6px;width:90%}button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px}.btn-done{background:#0a7a2a!important;color:white!important}.btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}.btn-grey{background:#888;color:white}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}}.badge{padding:6px 12px;border-radius:20px;background:#0D2A54;color:#FFC107}.progress{height:10px;background:#eee;border-radius:10px;overflow:hidden}.progress-fill{height:100%;background:linear-gradient(90deg,#0a7a2a,#FFC107)}a{color:#1565c0;font-weight:bold;text-decoration:none}table{width:100%;border-collapse:collapse}th,td{padding:8px;text-align:left;border-bottom:1px solid #eee}</style>"""
+CSS = """<style>body{font-family:system-ui,Arial;background:#FFF8E1;margin:0;padding:15px;color:#1a1a1a}h2{color:#0D2A54;border-bottom:3px solid #FFC107;padding-bottom:8px}.card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 4px 14px rgba(0,0,0,0.1);border-top:5px solid #FFC107}input,select{padding:11px;border-radius:10px;border:2px solid #FFC107;margin:6px;width:90%}button{padding:11px 20px;border-radius:10px;border:none;background:#0D2A54;color:#FFC107;font-weight:bold;cursor:pointer;margin:5px}.btn-done{background:#0a7a2a!important;color:white!important}.btn-red{background:#d32f2f;color:white}.btn-orange{background:#ef6c00;color:white}.btn-blue{background:#1565c0;color:white}.btn-grey{background:#888;color:white}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}}.badge{padding:6px 12px;border-radius:20px;background:#0D2A54;color:#FFC107}.progress{height:10px;background:#eee;border-radius:10px;overflow:hidden}.progress-fill{height:100%;background:linear-gradient(90deg,#0a7a2a,#FFC107)}a{color:#1565c0;font-weight:bold;text-decoration:none}table{width:100%;border-collapse:collapse}th,td{padding:8px;text-align:left;border-bottom:1px solid #eee}@media print{button,.no-print{display:none}}</style>"""
 
 @app.route("/")
 def home():
@@ -114,7 +88,7 @@ def home():
     html += """<div class="card"><h3>Create New School</h3><form method="post" action="/create_school"><input name="school_name" placeholder="Bright Angels" required><input name="code" placeholder="Code BRIGHT123" required><input name="director" placeholder="Director WhatsApp 2567..." required><input name="paid_until" type="date" required><button>Add School +</button></form></div><hr>"""
     for code, s in db.get("schools", {}).items():
         lock = "EXPIRED" if is_locked(s) else "Active"
-        html += f"""<div class='card'><b>{s['name']}</b> ({code}) - {lock} - Paid: {s['paid_until']} | Director: {s['director_phone']}<br><form method='post' action='/super/update_paid/{code}' style='display:inline'><input type='date' name='paid_until' value='{s['paid_until']}' required><button style='padding:6px 12px;font-size:13px'>Update Paid</button></form> <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Report</a> | <a href='/super/delete_school/{code}' style='color:red'>Delete</a><br>"""
+        html += f"""<div class='card'><b>{s['name']}</b> ({code}) - {lock} - Paid: {s['paid_until']}<br><form method='post' action='/super/update_paid/{code}' style='display:inline'><input type='date' name='paid_until' value='{s['paid_until']}' required><button style='padding:6px 12px;font-size:13px'>Update Paid</button></form> <a href='/admin/{code}'>Manage</a> | <a href='/report/{code}'>Report</a> | <a href='/super/delete_school/{code}' style='color:red'>Delete</a><br>"""
         for vp, van in s.get('vans', {}).items():
             html += f"Van <b>{vp}</b> - {van['driver_name']} - <a href='/driver/{code}/{vp}'>Driver Page</a><br>"
         html += "</div>"
@@ -144,7 +118,7 @@ def delete_school(code):
     save_db(db)
     return redirect("/")
 
-ADMIN_HTML = CSS + """<h2>{{school.name}} Admin ({{code}}) - {% if locked %}EXPIRED {{school.paid_until}}{% else %}Paid until {{school.paid_until}}{% endif %}</h2><p>Kampala: {{kampala_time}}</p><a href="/">Super Admin</a> | <a href="/report/{{code}}">Daily Report</a><div class="card"><h3>Daily Control</h3><form method="post" action="/api/{{code}}/reset_all"><button style="background:#0a7a2a;width:100%">RESET ALL FOR TOMORROW</button></form></div><div class="card"><h3>Add Van</h3><form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A - spaces ok" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form></div><div class="card"><h3>Add Kid to Van</h3><form method="post" action="/admin/{{code}}/add_kid"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form></div><hr><h3>Vans & Kids ({{total_kids}})</h3>{% for vp, van in school.vans.items() %}<div class="card"><b>{{vp}} - {{van.driver_name}}</b> - <a href="/driver/{{code}}/{{vp}}">Driver Page</a> <a href="/admin/{{code}}/delete_van/{{vp}}" style="color:red;float:right">Delete Van</a><br>{% for kid_id, kid in school.kids.items() if kid.van_plate==vp %} - {{kid.name}} ({{kid.stage}}) - {{kid.status}} - {{kid.parent_phone}} - <a href="/p/{{kid_id}}">View</a> <a href="/admin/{{code}}/delete_kid/{{kid_id}}" style="color:red">Delete Kid</a><br>{% else %}<i>No kids in this van yet</i><br>{% endfor %}</div>{% endfor %}"""
+ADMIN_HTML = CSS + """<h2>{{school.name}} Admin ({{code}}) - {% if locked %}EXPIRED {{school.paid_until}}{% else %}Paid until {{school.paid_until}}{% endif %}</h2><p>Kampala: {{kampala_time}}</p><a href="/">Super Admin</a> | <a href="/report/{{code}}">Daily Report</a><div class="card"><h3>Daily Control</h3><form method="post" action="/api/{{code}}/reset_all"><button style="background:#0a7a2a;width:100%">RESET ALL FOR TOMORROW</button></form></div><div class="card"><h3>Add Van</h3><form method="post" action="/admin/{{code}}/add_van"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form></div><div class="card"><h3>Add Kid to Van</h3><form method="post" action="/admin/{{code}}/add_kid"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in school.vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form></div><hr><h3>Vans & Kids ({{total_kids}})</h3>{% for vp, van in school.vans.items() %}<div class="card"><b>{{vp}} - {{van.driver_name}}</b> - <a href="/driver/{{code}}/{{vp}}">Driver Page</a> <a href="/admin/{{code}}/delete_van/{{vp}}" style="color:red;float:right">Delete Van</a><br>{% for kid_id, kid in school.kids.items() if kid.van_plate==vp %} - {{kid.name}} ({{kid.stage}}) - {{kid.status}} - <a href="/p/{{kid_id}}">View</a> <a href="/admin/{{code}}/delete_kid/{{kid_id}}" style="color:red">Delete</a><br>{% else %}<i>No kids</i><br>{% endfor %}</div>{% endfor %}"""
 
 @app.route("/admin/<code>")
 def admin(code):
@@ -190,7 +164,7 @@ def add_kid(code):
     kid_id = str(uuid.uuid4())[:8].upper()
     van_plate = normalize_plate(request.form['van_plate'])
     if van_plate not in db['schools'][code]['vans']:
-        return f"Van {van_plate} not found! Available: {list(db['schools'][code]['vans'].keys())} <a href='/admin/{code}'>Back</a>"
+        return f"Van {van_plate} not found! <a href='/admin/{code}'>Back</a>"
     db['schools'][code]['kids'][kid_id] = {"id": kid_id,"name": request.form['kid_name'],"stage": request.form['stage'],"parent_phone": request.form['parent_phone'],"van_plate": van_plate,"status": "At Home - waiting for van","times": {},"absent": False}
     save_db(db)
     whatsapp_template(request.form['parent_phone'], "picked_home", [request.form['kid_name'], current_time_str(), van_plate])
@@ -208,7 +182,6 @@ def reset_all(code):
 DRIVER_HTML = CSS + """<h2>Driver: {{van.driver_name}} - Van {{van.plate}} - {{school.name}}</h2>{% if locked %}<div class="card" style="background:#ffcccc"><h1>PAY TO UNLOCK</h1></div>{% endif %}<p>Code: {{code}} | Kampala: {{kampala_time}} | {{today}} | {{kids|length}} kids</p>
 <div class="card" style="border:2px solid #d32f2f">
 <h3 style="color:#d32f2f">🚨 ALERT to ALL Parents (Template Safe)</h3>
-<label>Choose reason:</label><br>
 <select id="trafficReason" style="width:95%;padding:12px;border:2px solid #d32f2f">
 <option value="Heavy traffic - 15 mins late">Heavy traffic - 15 mins late</option>
 <option value="Heavy traffic - 30 mins late">Heavy traffic - 30 mins late</option>
@@ -220,7 +193,6 @@ DRIVER_HTML = CSS + """<h2>Driver: {{van.driver_name}} - Van {{van.plate}} - {{s
 </select>
 <input id="trafficCustom" placeholder="Type custom - max 80 chars" style="width:95%;display:none;margin-top:8px" maxlength="80">
 <br><br><button class="btn-red" onclick="sendTraffic()" style="width:100%">🚨 SEND ALERT TO ALL PARENTS</button>
-<p style="font-size:12px">Will send: ALERT from Van {{van.plate}}: [reason]</p>
 </div>
 <hr><div class="grid">{% for kid_id, kid in kids.items() %}<div class="card"><b>{{kid.name}}</b> - {{kid.stage}}<br>Status: <span class="badge">{{kid.status}}</span><div class="progress"><div class="progress-fill" style="width: {{kid.progress}}%"></div></div><br><button onclick="action('{{kid.id}}','picked_home')">PICKED HOME</button><button onclick="action('{{kid.id}}','dropped_school')">DROPPED SCHOOL</button><button onclick="action('{{kid.id}}','picked_school')">PICKED SCHOOL</button><button onclick="action('{{kid.id}}','dropped_home')">DROPPED HOME</button><br><button class="btn-orange" onclick="action('{{kid.id}}','absent')">ABSENT</button><button class="btn-grey" onclick="action('{{kid.id}}','present')">BACK</button></div>{% endfor %}</div>
 <script>
@@ -235,7 +207,6 @@ function sendTraffic(){
   let msg = reasonEl.value;
   if(msg=='custom'){ msg = customEl.value.trim(); }
   if(!msg){ alert('Choose or type a reason!'); return; }
-  if(msg.length>100){ alert('Too long! Max 100 chars'); return; }
   msg = msg.replace(/[^a-zA-Z0-9 \\-:,]/g, '').trim();
   if(msg.length<5){ alert('Too short'); return; }
   if(!confirm('Send to ALL parents?\\n\\n' + msg)){ return; }
@@ -317,7 +288,7 @@ def traffic(code, plate):
     for kid in [k for k in school['kids'].values() if k['van_plate']==plate_norm and not k['absent']]:
         ok, _ = whatsapp_template(kid['parent_phone'], "traffic_alert", [plate_norm, clean_msg])
         if ok: sent += 1
-    return jsonify({"sent": True, "count": sent, "message": clean_msg})
+    return jsonify({"sent": True, "count": sent})
 
 @app.route("/p/<kid_id>")
 def parent_view(kid_id):
@@ -331,6 +302,7 @@ def parent_view(kid_id):
             return CSS + f"<div class='card'><h2>{kid['name']}</h2>Stage: {kid['stage']}<br>Van: {kid['van_plate']} Driver {van['driver_name']}<br><h3>Status: {kid['status']}</h3><b>Timeline (Kampala):</b><br>{timeline}<br><br><i>Live Fikisha {current_time_str()}</i></div>"
     return "Kid not found"
 
+# --- REPORT ONLY DOWNLOAD & PRINT (NO WHATSAPP) ---
 @app.route("/report/<code>")
 def report(code):
     db = load_db()
@@ -345,41 +317,66 @@ def report(code):
     picked_school = sum(1 for k in kids if 'picked_school' in k['times'])
     dropped_home = sum(1 for k in kids if 'dropped_home' in k['times'])
     absent = sum(1 for k in kids if k.get('absent'))
-    html = CSS + f"<div class='card'><h2>📊 Daily Report - {school['name']}</h2><p>Date: {today} | Kampala: {current_time_str()} | {kampala_now().strftime('%d %b %Y %I:%M %p')}</p><div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px'><div style='background:#e8f5e9;padding:12px;border-radius:10px;text-align:center'><b>{total}</b><br>Total Kids</div><div style='background:#fff3e0;padding:12px;border-radius:10px;text-align:center'><b>{picked_home}</b><br>Picked Home</div><div style='background:#e3f2fd;padding:12px;border-radius:10px;text-align:center'><b>{dropped_school}</b><br>At School</div><div style='background:#fce4ec;padding:12px;border-radius:10px;text-align:center'><b>{picked_school}</b><br>Picked School</div><div style='background:#e8f5e9;padding:12px;border-radius:10px;text-align:center'><b>{dropped_home}</b><br>Home Safe</div><div style='background:#ffebee;padding:12px;border-radius:10px;text-align:center'><b>{absent}</b><br>Absent</div></div></div>"
+
+    html = CSS + f"""
+    <div class='no-print' style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+        <a href="/report/{code}/csv"><button class="btn-blue">📥 Download CSV (Excel)</button></a>
+        <button onclick="window.print()" class="btn-grey">🖨️ Print / Save as PDF</button>
+        <a href="/admin/{code}"><button>Back to Admin</button></a>
+    </div>
+    <div class='card'>
+    <h2>📊 Daily Report - {school['name']}</h2>
+    <p>Date: {today} | Kampala: {current_time_str()} | {kampala_now().strftime('%d %b %Y %I:%M %p')} EAT</p>
+    <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px'>
+        <div style='background:#e8f5e9;padding:12px;border-radius:10px;text-align:center'><b>{total}</b><br>Total Kids</div>
+        <div style='background:#fff3e0;padding:12px;border-radius:10px;text-align:center'><b>{picked_home}</b><br>Picked Home</div>
+        <div style='background:#e3f2fd;padding:12px;border-radius:10px;text-align:center'><b>{dropped_school}</b><br>At School</div>
+        <div style='background:#fce4ec;padding:12px;border-radius:10px;text-align:center'><b>{picked_school}</b><br>Picked School</div>
+        <div style='background:#e8f5e9;padding:12px;border-radius:10px;text-align:center'><b>{dropped_home}</b><br>Home Safe</div>
+        <div style='background:#ffebee;padding:12px;border-radius:10px;text-align:center'><b>{absent}</b><br>Absent</div>
+    </div>
+    </div>
+    """
     for vp, van in school['vans'].items():
         van_kids = [k for k in kids if k['van_plate']==vp]
-        html += f"<div class='card'><h3>Van {vp} - {van['driver_name']} ({len(van_kids)} kids)</h3><table><tr style='background:#0D2A54;color:#FFC107'><th>Kid</th><th>Stage</th><th>Status</th><th>Timeline</th><th>Parent</th></tr>"
+        html += f"<div class='card'><h3>Van {vp} - {van['driver_name']} - {van['driver_phone']} ({len(van_kids)} kids)</h3><table><tr style='background:#0D2A54;color:#FFC107'><th>Kid</th><th>Stage</th><th>Status</th><th>Timeline</th><th>Parent</th></tr>"
         for k in van_kids:
             timeline = "<br>".join([f"{kk}: {vv}" for kk,vv in k['times'].items()]) or "Waiting"
             if k.get('absent'): timeline = "ABSENT"
             html += f"<tr><td>{k['name']}</td><td>{k['stage']}</td><td>{k['status']}</td><td style='font-size:11px'>{timeline}</td><td>{k['parent_phone']}</td></tr>"
         html += "</table></div>"
-    html += f"<div class='card'><h3>📲 Send to Director</h3><button onclick='sendReport()' class='btn-blue'>Send Summary via WhatsApp to {school['director_phone']}</button><p id='reportStatus'></p></div><script>function sendReport(){{let text=`FIKISHA REPORT {school['name']} {today} Kampala {current_time_str()}%0ATotal:{total} Picked:{picked_home} Dropped:{dropped_home} Absent:{absent}%0AFull report: https://{request.host}/report/{code}`;fetch('/api/{code}/send_report',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{text: decodeURIComponent(text)}})}}).then(r=>r.json()).then(j=>{{document.getElementById('reportStatus').innerText=j.ok?'✅ Sent!':'❌ '+j.error}})}}<\/script>"
+
+    html += f"""
+    <div class='card no-print' style="text-align:center">
+    <h3>📥 Download Report</h3>
+    <a href="/report/{code}/csv"><button class="btn-blue" style="width:90%;padding:16px;font-size:16px">📥 Download CSV for Excel</button></a><br><br>
+    <button onclick="window.print()" class="btn-grey" style="width:90%;padding:16px;font-size:16px">🖨️ Print / Save as PDF</button>
+    <p style="font-size:12px;color:#666;margin-top:10px">CSV opens in Excel. Print saves as PDF on phone.</p>
+    </div>
+    """
     return html
 
-@app.route("/api/<code>/send_report", methods=["POST"])
-def send_report(code):
+@app.route("/report/<code>/csv")
+def report_csv(code):
     db = load_db()
     code = normalize_code(code)
     school = db['schools'].get(code)
-    if not school: return jsonify({"ok": False, "error": "no school"})
-    msg = request.get_json().get('text','')
-    ok, resp = whatsapp_text(school['director_phone'], msg)
-    return jsonify({"ok": ok, "resp": resp[:300]})
+    if not school: return "School not found", 404
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([f"Daily Report - {school['name']}", str(date.today()), f"Kampala {current_time_str()}"])
+    writer.writerow([])
+    writer.writerow(["Van Plate", "Driver", "Kid Name", "Stage", "Status", "Absent", "Picked Home", "Dropped School", "Picked School", "Dropped Home", "Parent Phone"])
+    for k in school['kids'].values():
+        van = school['vans'].get(k['van_plate'], {})
+        writer.writerow([k['van_plate'], van.get('driver_name',''), k['name'], k['stage'], k['status'],"YES" if k.get('absent') else "NO",k['times'].get('picked_home',''), k['times'].get('dropped_school',''),k['times'].get('picked_school',''), k['times'].get('dropped_home',''),k['parent_phone']])
+    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename=FIKISHA_{school['name']}_{date.today()}.csv"})
 
 @app.route("/test_wa/<phone>")
 def test_wa(phone):
     t = current_time_str()
     ok, r = whatsapp_template(phone, "picked_home", ["Musa", t, "UAA123"])
-    ok2, r2 = whatsapp_template(phone, "traffic_alert", ["UAA123", "Heavy traffic - 15 mins late"])
-    return jsonify({"kampala_time": t, "picked_home_ok": ok, "traffic_ok": ok2, "resp": r[:200]})
-
-@app.route("/debug/<code>")
-def debug(code):
-    db = load_db()
-    school = db['schools'].get(normalize_code(code))
-    import json as js
-    return f"<pre>Kampala now: {kampala_now()} ({current_time_str()})\n{js.dumps(school, indent=2)}</pre>"
+    return jsonify({"kampala_time": t, "ok": ok, "resp": r[:300]})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

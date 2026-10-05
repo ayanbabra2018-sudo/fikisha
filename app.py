@@ -513,140 +513,89 @@ def traffic(code, plate):
             return jsonify({"ok": False, "cooldown": True}), 429
         raw_msg = (request.get_json() or {}).get('message','').strip()
         if not raw_msg or len(raw_msg) < 5: return jsonify({"ok": False}), 400
-        clean_msg = raw_msg[:100].strip()
+        clean_msg = raw_msg[:100]
         TRAFFIC_COOLDOWN[key]=time.time()
-        kids = db_get_kids(code_norm, plate_norm); sent=0
+        kids = db_get_kids(code_norm, plate_norm)
+        count=0
         for kid in kids:
-            if not kid or kid.get('absent'): continue
-            whatsapp_async(kid.get('parent_phone',''), "traffic_alert", [plate_norm, clean_msg]); sent+=1
-        return jsonify({"sent": True, "count": sent})
+            if not kid: continue
+            whatsapp_async(kid.get('parent_phone',''), "traffic_alert", [kid.get('name',''), clean_msg, plate_norm])
+            count+=1
+        safe_post(f"{SUPABASE_URL}/rest/v1/attendance_log", headers=h(), json={"school_code": code_norm, "kid_name": f"ALL {plate_norm}", "kid_id": "TRAFFIC", "van_plate": plate_norm, "action": f"traffic: {clean_msg}", "log_date": str(date.today()), "log_time": kampala_now().strftime("%I:%M %p %d %b")})
+        return jsonify({"ok": True, "count": count})
     except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/<code>/<plate>/sync", methods=["POST"])
-def bulk_sync(code, plate):
+def sync(code, plate):
     try:
         code_norm = normalize_code(code); plate_norm = normalize_plate(plate)
         school = db_get_school(code_norm)
-        if not school or is_locked(school): return jsonify({"locked": True}), 403
-        cookie_pin = request.cookies.get(f"driver_pin_{plate_norm}"); vans = db_get_vans(code_norm); van = next((v for v in vans if v['plate']==plate_norm), None)
-        if not van or cookie_pin!= get_van_pin(van): return jsonify({"ok": False}), 401
-        items = (request.get_json() or {}).get('items', []) or []
-        if len(items)>100: items=items[-100:]
-        short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b"); count=0; skipped=0
-        for it in items:
-            kid_id=it.get('kid_id'); act=it.get('action')
+        if not school or is_locked(school): return jsonify({"ok": False}), 403
+        data = request.get_json() or {}; items = data.get('items',[]) or []
+        for it in items[:100]:
+            kid_id = it.get('kid_id'); act = it.get('action')
+            if not kid_id or not act: continue
             r=safe_get(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(code_norm)}&select=*", headers=h())
             if not r or not r.json(): continue
-            kid=r.json()[0]
-            times = kid.get('times',{}) or {}
-            if act in times and act not in ['present','absent']: skipped+=1; continue
+            kid = r.json()[0]; times = kid.get('times',{}) or {}
+            if act in times and act not in ['present','absent']: continue
+            short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b")
             patch={}
-            if act=='picked_home': patch["status"]=f"On way to School - picked at {short}"; times['picked_home']=full; patch["times"]=times; patch["absent"]=False; whatsapp_async(kid.get('parent_phone',''), "picked_home", [kid.get('name',''), short, plate_norm])
-            elif act=='dropped_school': patch["status"]=f"At School - arrived at {short}"; times['dropped_school']=full; patch["times"]=times; whatsapp_async(kid.get('parent_phone',''), "dropped_school", [kid.get('name',''), short])
-            elif act=='picked_school': patch["status"]=f"On way Home - left at {short}"; times['picked_school']=full; patch["times"]=times; whatsapp_async(kid.get('parent_phone',''), "picked_school", [kid.get('name',''), short, plate_norm])
-            elif act=='dropped_home': patch["status"]=f"Home Safe - {short}"; times['dropped_home']=full; patch["times"]=times; patch["dropped_home_ts"]=kampala_now().isoformat(); whatsapp_async(kid.get('parent_phone',''), "dropped_home", [kid.get('name',''), short])
-            elif act=='absent': patch["status"]="ABSENT Today"; patch["absent"]=True; whatsapp_async(kid.get('parent_phone',''), "absent", [kid.get('name',''), str(date.today()), plate_norm])
-            elif act=='present': patch["absent"]=False; patch["status"]="At Home - waiting for van"; patch["times"]={}; patch["dropped_home_ts"]=None
-            if patch:
-                safe_patch(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(code_norm)}", headers=h(), json=patch)
-                safe_post(f"{SUPABASE_URL}/rest/v1/attendance_log", headers=h(), json={"school_code": code_norm, "kid_name": kid.get('name',''), "kid_id": kid_id, "van_plate": plate_norm, "action": act, "log_date": str(date.today()), "log_time": full})
-                count+=1
-        return jsonify({"ok": True, "count": count, "skipped": skipped})
+            if act=='picked_home': patch={"status": f"On way to School - picked at {short}", "times": {**times, "picked_home": full}, "absent": False}
+            elif act=='dropped_school': patch={"status": f"At School - arrived at {short}", "times": {**times, "dropped_school": full}}
+            elif act=='picked_school': patch={"status": f"On way Home - left at {short}", "times": {**times, "picked_school": full}}
+            elif act=='dropped_home': patch={"status": f"Home Safe - {short}", "times": {**times, "dropped_home": full}, "dropped_home_ts": kampala_now().isoformat()}
+            elif act=='absent': patch={"status": "ABSENT Today", "absent": True}
+            elif act=='present': patch={"status": "At Home - waiting for van", "times": {}, "absent": False, "dropped_home_ts": None}
+            if patch: safe_patch(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(code_norm)}", headers=h(), json=patch)
+        return jsonify({"ok": True})
     except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/p/<kid_id>")
-def parent_view(kid_id):
+def parent_page(kid_id):
     try:
         r=safe_get(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&select=*", headers=h())
-        if not r or not r.json(): return CSS + "<div class='card'><h2>🔍 Kid not found</h2></div>"
-        kid=r.json()[0]
-        school=db_get_school(kid['school_code'])
-        if is_locked(school): return CSS + f"<div class='card' style='background:#ffcccc;text-align:center'><h2>🔒 Service Paused</h2></div>"
-        vans=db_get_vans(kid['school_code']); van=next((v for v in vans if v['plate']==kid.get('van_plate','')), {}) or {}
-        if maybe_auto_reset(kid):
-            safe_patch(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(kid['school_code'])}", headers=h(), json={"times": kid['times'], "status": kid['status'], "absent": kid['absent'], "dropped_home_ts": None})
-        times = kid.get('times',{}) or {}
-        progress = len(times) * 25
-        timeline_html = ""
-        steps = [("picked_home", "🏠 Picked Home", "On the road"), ("dropped_school", "🏫 Dropped School", "Safe at school"), ("picked_school", "🚐 Picked School", "Heading home"), ("dropped_home", "✅ Dropped Home", "Home safe")]
-        for key, label, sub in steps:
-            done = key in times; icon = "✅" if done else "⭕"; t = times.get(key, "— waiting")
-            timeline_html += f"<div style='display:flex;gap:14px;margin:16px 0;opacity:{1 if done else 0.45};align-items:center'><div style='font-size:26px;width:32px;text-align:center'>{icon}</div><div><b>{label}</b><br><small style='color:#555'>{t} — {sub}</small></div></div>"
-        status_color = "#0a7a2a" if "Home Safe" in (kid.get('status','') or '') else "#0D2A54"
-        status_emoji = "✅" if progress>=100 else "👦"
-        driver_wa = to_wa(van.get('driver_phone',''))
-        return f"""{CSS}<meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="30"><div style="max-width:500px;margin:0 auto"><div style="text-align:center;padding:12px"><h2>🚐 FIKISHA</h2><small>{(school.get('name','') or '')} | Van {kid.get('van_plate','')} | {current_time_str()}</small></div><div class="card" style="border-top:7px solid {status_color};text-align:center;border-radius:20px"><div style="font-size:56px">{status_emoji}</div><h2 style="border:none;margin:12px 0">{kid.get('name','')}</h2><small>Stage {kid.get('stage','')} | ID {kid.get('id','')}</small><br><br><span class="badge" style="background:{status_color};padding:10px 18px;border-radius:30px">{kid.get('status','')}</span><div class="progress" style="height:16px;margin:22px 0;border-radius:20px"><div class="progress-fill" style="width:{progress}%"></div></div><small><b>{progress}% Complete</b></small></div><div class="card" style="border-radius:20px"><h3>🛣️ Live Journey</h3>{timeline_html}</div></div>"""
-    except Exception as e: return CSS + f"<div class='card'><h2>Error</h2><p>{e}</p></div>"
+        if not r or not r.json(): return CSS + "<div class='card'><h2>Kid not found</h2></div>"
+        kid = r.json()[0]
+        maybe_auto_reset(kid)
+        cnt=0
+        if 'picked_home' in (kid.get('times',{}) or {}): cnt=25
+        if 'dropped_school' in (kid.get('times',{}) or {}): cnt=50
+        if 'picked_school' in (kid.get('times',{}) or {}): cnt=75
+        if 'dropped_home' in (kid.get('times',{}) or {}): cnt=100
+        html = CSS + f"<h2>{kid.get('name','')} - {kid.get('status','')}</h2><div class='card'><div class='progress'><div class='progress-fill' style='width:{cnt}%'></div></div><p>{cnt}% complete</p><p>Status: {kid.get('status','')}</p>"
+        for k,v in (kid.get('times',{}) or {}).items(): html+=f"<p>{k}: {v}</p>"
+        html+="</div><script>setTimeout(()=>location.reload(),30000)</script>"
+        return html
+    except Exception as e: return CSS + f"<div class='card'><p>{e}</p></div>"
 
 @app.route("/report/<code>")
 def report_daily(code):
     try:
-        code_norm = normalize_code(code); school = db_get_school(code_norm)
-        if not school: return CSS + "<div class='card'><h2>No school</h2></div>"
-        if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
-        kids = db_get_kids(code_norm)
-        total = len(kids); picked = sum(1 for k in kids if k and 'picked_home' in (k.get('times',{}) or {})); absent = sum(1 for k in kids if k and k.get('absent'))
-        html = CSS + f"<div class='no-print'><a href='/admin/{code_norm}'><button>⬅️ Admin</button></a> <a href='/report/{code_norm}/weekly'><button class='btn-blue'>📊 Weekly</button></a> <a href='/report/{code_norm}/csv'><button class='btn-orange'>📥 CSV Daily</button></a></div><div class='card'><h2>Daily Report - {school.get('name','')} - {date.today()} - {current_time_str()} - Only {code_norm}</h2><p>Total:{total} Picked:{picked} Absent:{absent}</p></div><div class='card'><table><tr><th>Kid</th><th>Van</th><th>Status</th><th>Parent</th></tr>"
-        for k in kids:
-            if not k: continue
-            html += f"<tr><td>{k.get('name','')}</td><td>{k.get('van_plate','')}</td><td>{k.get('status','')}</td><td>{k.get('parent_phone','')}</td></tr>"
-        html += "</table></div>"; return html
-    except Exception as e: return f"Daily error {e}"
+        code_norm = normalize_code(code); logs = db_get_logs(code_norm, 200)
+        html = CSS + f"<h2>Daily Report {code_norm} - {date.today()}</h2><div class='card'><a href='/report/{code_norm}/weekly'>Weekly</a> | <a href='/admin/{code_norm}'>Admin</a><br><br><table border=1 cellpadding=8 style='width:100%;border-collapse:collapse'><tr><th>Time</th><th>Kid</th><th>Van</th><th>Action</th></tr>"
+        for lg in logs: html+=f"<tr><td>{lg.get('log_time','')}</td><td>{lg.get('kid_name','')}</td><td>{lg.get('van_plate','')}</td><td>{lg.get('action','')}</td></tr>"
+        html+="</table></div>"; return html
+    except Exception as e: return CSS + f"<p>{e}</p>"
 
 @app.route("/report/<code>/weekly")
-def weekly_report(code):
+def report_weekly(code):
     try:
-        code_norm = normalize_code(code); school = db_get_school(code_norm)
-        if not school: return CSS + "<div class='card'><h2>No school</h2></div>"
-        if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
-        kids = db_get_kids(code_norm); total = len([k for k in kids if k]); absent_today = sum(1 for k in kids if k and k.get('absent')); not_picked = [k for k in kids if k and not (k.get('times',{}) or {}) and not k.get('absent')]; picked_home = sum(1 for k in kids if k and 'picked_home' in (k.get('times',{}) or {}))
-        html = CSS + f"""<meta name="viewport" content="width=device-width, initial-scale=1"><div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap"><a href="/admin/{code_norm}"><button>⬅️ Admin</button></a><a href="/report/{code_norm}"><button class="btn-grey">Daily</button></a><a href="/report/{code_norm}/weekly/csv"><button class="btn-blue">📥 Weekly CSV</button></a></div><h2>📊 {school.get('name','')} ({code_norm}) - {current_time_str()} - FINAL</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px"><div class="card" style="text-align:center"><h3>{total}</h3><small>Total</small></div><div class="card" style="text-align:center"><h3>{picked_home}</h3><small>Picked</small></div><div class="card" style="text-align:center"><h3>{absent_today}</h3><small>Absent</small></div></div><div class="card"><b>Not yet picked ({len(not_picked)}):</b> {', '.join([k.get('name','') for k in not_picked]) or 'All picked ✅'}</div><div class="card"><h3>All Kids - Isolated to {code_norm}</h3><table><tr><th>Kid</th><th>Van</th><th>Status</th><th>Times</th></tr>"""
-        for kid in kids:
-            if not kid: continue
-            times = kid.get('times',{}) or {}; times_str = "<br>".join([f"<small>{k}: {v}</small>" for k,v in times.items()]) or "<small>Not started</small>"
-            html += f"<tr><td><b>{kid.get('name','')}</b></td><td>{kid.get('van_plate','')}</td><td>{'🚫 ABSENT' if kid.get('absent') else '✅'}<br><small>{(kid.get('status','') or '')[:30]}</small></td><td>{times_str}</td></tr>"
-        html += "</table></div>"
-        log = db_get_logs(code_norm, 200)
-        if log:
-            html += f"<div class='card'><h3>Recent Log - Only {code_norm}</h3><table><tr><th>Date</th><th>Kid</th><th>Van</th><th>Action</th><th>Time</th></tr>"
-            for e in log:
-                html += f"<tr><td>{e.get('log_date','')}</td><td>{e.get('kid_name','')}</td><td>{e.get('van_plate','')}</td><td>{e.get('action','')}</td><td><small>{e.get('log_time','')}</small></td></tr>"
-            html += "</table></div>"
-        return html
-    except Exception as e: return f"Weekly error {e}"
-
-@app.route("/report/<code>/csv")
-def export_csv_daily(code):
-    code_norm = normalize_code(code); school = db_get_school(code_norm)
-    if not school: return "No school"
-    if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
-    kids = db_get_kids(code_norm)
-    si = io.StringIO(); cw = csv.writer(si); cw.writerow(["Kid ID","Name","Stage","Van","Parent Phone","Status","Absent","Picked Home","Dropped School","Picked School","Dropped Home","Report Time","School Code"])
-    for kid in kids:
-        if not kid: continue
-        t = kid.get('times',{}) or {}; cw.writerow([kid.get('id',''),kid.get('name',''),kid.get('stage',''),kid.get('van_plate',''),kid.get('parent_phone',''),kid.get('status',''),kid.get('absent',False),t.get('picked_home',''),t.get('dropped_school',''),t.get('picked_school',''),t.get('dropped_home',''),current_time_str(), code_norm])
-    output = make_response(si.getvalue()); output.headers["Content-Disposition"] = f"attachment; filename=FIKISHA_DAILY_{code_norm}_{date.today()}.csv"; output.headers["Content-type"] = "text/csv"; return output
-
-@app.route("/report/<code>/weekly/csv")
-def export_csv_weekly(code):
-    code_norm = normalize_code(code); school = db_get_school(code_norm)
-    if not school: return "No school"
-    if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
-    si = io.StringIO(); cw = csv.writer(si); cw.writerow(["Date","Time","Kid Name","Van","Action","School"])
-    for e in db_get_logs(code_norm, 500):
-        cw.writerow([e.get('log_date',''), e.get('log_time',''), e.get('kid_name',''), e.get('van_plate',''), e.get('action',''), code_norm])
-    output = make_response(si.getvalue()); output.headers["Content-Disposition"] = f"attachment; filename=FIKISHA_WEEKLY_{code_norm}_{date.today()}.csv"; output.headers["Content-type"] = "text/csv"; return output
+        code_norm = normalize_code(code); logs = db_get_logs(code_norm, 1000)
+        html = CSS + f"<h2>Weekly Report {code_norm}</h2><div class='card'><a href='/report/{code_norm}'>Daily</a> | <a href='/admin/{code_norm}'>Admin</a><br><br>"
+        html+="<table border=1 cellpadding=8 style='width:100%;border-collapse:collapse'><tr><th>Date</th><th>Kid</th><th>Action</th><th>Van</th></tr>"
+        for lg in logs: html+=f"<tr><td>{lg.get('log_date','')}</td><td>{lg.get('kid_name','')}</td><td>{lg.get('action','')}</td><td>{lg.get('van_plate','')}</td></tr>"
+        html+="</table></div>"; return html
+    except Exception as e: return CSS + f"<p>{e}</p>"
 
 @app.route("/manifest.json")
-def manifest(): return jsonify({"name": "FIKISHA Driver","short_name": "FIKISHA","start_url": "/","display": "standalone","background_color": "#FFF8E1","theme_color": "#0D2A54"})
+def manifest():
+    return jsonify({"name":"FIKISHA","short_name":"FIKISHA","start_url":"/","display":"standalone","background_color":"#FFF8E1","theme_color":"#0D2A54","icons":[{"src":"https://via.placeholder.com/192","sizes":"192x192","type":"image/png"}]})
+
 @app.route("/sw.js")
-def sw(): return Response("self.addEventListener('install', e=>{ self.skipWaiting(); }); self.addEventListener('activate', e=>{ self.clients.claim(); }); self.addEventListener('fetch', e=>{ e.respondWith(fetch(e.request).catch(()=> caches.match(e.request))); });", mimetype='application/javascript')
-@app.route("/health")
-def health():
-    try:
-        r=safe_get(f"{SUPABASE_URL}/rest/v1/schools?select=code", headers=h())
-        return jsonify({"ok": True, "schools": len(r.json()) if r and r.status_code==200 else 0, "mode": "final-armor-mass-pick"})
-    except: return jsonify({"ok": True})
+def sw():
+    js="self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"
+    return Response(js, mimetype="application/javascript")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))

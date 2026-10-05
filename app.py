@@ -1,68 +1,105 @@
 from flask import Flask, request, redirect, jsonify, Response, make_response
-import json, os, requests, csv, io, threading, uuid, time
+import json, os, requests, csv, io, threading, shutil, uuid, time
 from datetime import datetime, date, timedelta
 from urllib.parse import quote
 try:
     from zoneinfo import ZoneInfo
     KAMPALA_TZ = ZoneInfo("Africa/Kampala")
-except: KAMPALA_TZ = None
+except:
+    KAMPALA_TZ = None
 
 def kampala_now():
     try:
-        if KAMPALA_TZ: return datetime.now(KAMPALA_TZ)
+        if KAMPALA_TZ:
+            return datetime.now(KAMPALA_TZ)
         return datetime.now() + timedelta(hours=3)
-    except: return datetime.now()
-def normalize_plate(p): return str(p).upper().strip().replace(" ","") if p else ""
-def normalize_code(p): return str(p).upper().strip().replace(" ","") if p else ""
+    except:
+        return datetime.now()
+
+def normalize_plate(p):
+    try:
+        return str(p).upper().strip().replace(" ", "") if p else ""
+    except:
+        return ""
+
+def normalize_code(p):
+    try:
+        return str(p).upper().strip().replace(" ", "") if p else ""
+    except:
+        return ""
 
 app = Flask(__name__)
+DB_LOCK = threading.RLock()
 SUPABASE_URL = os.environ.get("SUPABASE_URL","").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY","")
 SUPER_ADMIN_PASSWORD = os.environ.get("SUPER_ADMIN_PASSWORD", "fikisha2026")
+
+# ARMOR - Cooldown storage
 TRAFFIC_COOLDOWN = {}
 ACTION_COOLDOWN = {}
 
 def h(): return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
 def hr(): return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"}
+
 def safe_get(url, **kw):
     for i in range(3):
-        try: return requests.get(url, timeout=10, **kw)
-        except: time.sleep(0.5*(i+1))
+        try:
+            r=requests.get(url, timeout=10, **kw)
+            return r
+        except:
+            time.sleep(0.5*(i+1))
     return None
+
 def safe_post(url, **kw):
     for i in range(2):
-        try: return requests.post(url, timeout=12, **kw)
-        except: time.sleep(0.5)
+        try:
+            r=requests.post(url, timeout=12, **kw)
+            return r
+        except:
+            time.sleep(0.5)
     return None
+
 def safe_patch(url, **kw):
     for i in range(2):
-        try: return requests.patch(url, timeout=12, **kw)
-        except: time.sleep(0.5)
+        try:
+            return requests.patch(url, timeout=12, **kw)
+        except:
+            time.sleep(0.5)
     return None
-def safe_delete(url, **kw):
-    try: return requests.delete(url, timeout=10, **kw)
-    except: return None
 
+def safe_delete(url, **kw):
+    try:
+        return requests.delete(url, timeout=10, **kw)
+    except:
+        return None
+
+# --- UNLIMITED HELPERS WITH ENCODING ---
 def db_get_school(code):
     code=normalize_code(code)
+    if not code: return None
     r=safe_get(f"{SUPABASE_URL}/rest/v1/schools?code=eq.{quote(code)}&select=*", headers=h())
     return r.json()[0] if r and r.status_code==200 and r.json() else None
+
 def db_get_vans(code):
     code=normalize_code(code)
     r=safe_get(f"{SUPABASE_URL}/rest/v1/vans?school_code=eq.{quote(code)}&select=*", headers=h())
     return r.json() if r and r.status_code==200 else []
+
 def db_get_kids(code, plate=None):
     code=normalize_code(code)
     url=f"{SUPABASE_URL}/rest/v1/kids?school_code=eq.{quote(code)}&select=*&order=name.asc"
     if plate: url+=f"&van_plate=eq.{quote(normalize_plate(plate))}"
     r=safe_get(url, headers=h())
     return r.json() if r and r.status_code==200 else []
+
 def db_get_logs(code, limit=200):
     code=normalize_code(code)
     r=safe_get(f"{SUPABASE_URL}/rest/v1/attendance_log?school_code=eq.{quote(code)}&select=*&order=created_at.desc&limit={limit}", headers=h())
     return r.json() if r and r.status_code==200 else []
+
 def load_db():
-    if not SUPABASE_URL or not SUPABASE_KEY: return {"schools": {}}
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {"schools": {}}
     try:
         r=safe_get(f"{SUPABASE_URL}/rest/v1/schools?select=*", headers=h())
         schools=r.json() if r and r.status_code==200 else []
@@ -71,18 +108,26 @@ def load_db():
             code=s['code']
             vans={v['plate']: {"plate": v['plate'], "driver_name": v.get('driver_name',''), "driver_phone": v.get('driver_phone','')} for v in db_get_vans(code)}
             kids={k['id']: k for k in db_get_kids(code)}
-            result["schools"][code]={"name": s.get('name',''), "code": code, "director_phone": s.get('director_phone',''), "paid_until": s.get('paid_until','2026-12-31'), "vans": vans, "kids": kids}
+            result["schools"][code]={"name": s.get('name',''), "code": code, "director_phone": s.get('director_phone',''), "paid_until": s.get('paid_until','2026-12-31'), "vans": vans, "kids": kids, "attendance_log": db_get_logs(code)}
         return result
-    except: return {"schools": {}}
+    except:
+        return {"schools": {}}
+
 def to_wa(p):
     try:
         if not p: return ""
         c = str(p).replace("+","").replace(" ","").replace("-","").strip()
+        if not c: return ""
         if c.startswith("0"): c = "256" + c[1:]
         if len(c)==9: c = "256"+c
         return c
+    except:
+        return ""
+
+def current_time_str():
+    try: return kampala_now().strftime("%I:%M %p")
     except: return ""
-def current_time_str(): return kampala_now().strftime("%I:%M %p")
+
 def whatsapp_template(to, template_name, params=[]):
     token = os.environ.get("WHATSAPP_TOKEN"); phone_id = os.environ.get("WHATSAPP_PHONE_ID", "1327812003752192")
     if not token or not to: return False
@@ -92,12 +137,19 @@ def whatsapp_template(to, template_name, params=[]):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     body_params = [{"type": "text", "text": str(p)[:100]} for p in (params or [])]
     data = {"messaging_product": "whatsapp","to": clean,"type": "template","template": {"name": template_name,"language": {"code": "en_US"},"components": [{"type": "body", "parameters": body_params}] if body_params else []}}
-    try: r = requests.post(url, headers=headers, json=data, timeout=8); return r.status_code == 200
+    try:
+        r = requests.post(url, headers=headers, json=data, timeout=8); return r.status_code == 200
     except: return False
-def whatsapp_async(to, template_name, params=[]): threading.Thread(target=whatsapp_template, args=(to, template_name, params), daemon=True).start()
+
+def whatsapp_async(to, template_name, params=[]):
+    threading.Thread(target=whatsapp_template, args=(to, template_name, params), daemon=True).start()
+
 def is_locked(school):
-    try: return str(school.get('paid_until','')) < str(date.today())
+    try:
+        if not school or 'paid_until' not in school: return True
+        return str(school.get('paid_until','')) < str(date.today())
     except: return True
+
 def maybe_auto_reset(kid):
     try:
         ts = kid.get('dropped_home_ts')
@@ -113,9 +165,11 @@ def maybe_auto_reset(kid):
         try: kid['times'] = {}; kid['status'] = "At Home - waiting for van"; kid['absent'] = False; kid.pop('dropped_home_ts', None); return True
         except: pass
     return False
+
 def get_van_pin(van):
     try: phone = to_wa((van or {}).get('driver_phone','')); return phone[-4:] if len(phone)>=4 else "1234"
     except: return "1234"
+
 def get_admin_pin(school):
     try: phone = to_wa((school or {}).get('director_phone','')); return phone[-4:] if len(phone)>=4 else "1234"
     except: return "1234"
@@ -149,26 +203,31 @@ def home():
             else: return CSS + "<div class='card' style='background:#ffcccc'><h2>Wrong password</h2><a href='/'>Try again</a></div>"
         auth = request.cookies.get("super_auth")
         if auth!= SUPER_ADMIN_PASSWORD:
-            return CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 FIKISHA Super Admin</h2><form method="post" id="loginForm"><input name="password" type="password" placeholder="Password" required style="width:90%"><br><button style="width:95%" id="loginBtn">Unlock</button></form></div><script>document.getElementById('loginForm').addEventListener('submit',function(){document.getElementById('loginBtn').disabled=true;});</script>"""
+            return CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 FIKISHA Super Admin</h2><form method="post" id="loginForm"><input name="password" type="password" placeholder="Password" required style="width:90%"><br><button style="width:95%" id="loginBtn">Unlock</button></form></div><script>document.getElementById('loginForm').addEventListener('submit',function(){document.getElementById('loginBtn').disabled=true;document.getElementById('loginBtn').innerText='Unlocking...';});</script>"""
         db = load_db()
-        html = CSS + f"<h2>FIKISHA - Super Admin ({current_time_str()}) | FINAL Armor + Mass Pick ✅</h2>"
+        html = CSS + f"<h2>FIKISHA - Super Admin (Kampala: {current_time_str()}) | ARMOR + Unlimited ✅</h2>"
         html += """<div class="card"><h3>Create New School</h3><form method="post" action="/create_school" onsubmit="this.querySelector('button').disabled=true"><input name="school_name" placeholder="Bright Angels" required><input name="code" placeholder="Code BRIGHT123" required><input name="director" placeholder="Director WhatsApp 2567..." required><input name="paid_until" type="date" required><button>Add School +</button></form></div><hr>"""
         for code, s in (db.get("schools", {}) or {}).items():
             if not s: continue
             lock = "🔴 EXPIRED" if is_locked(s) else "🟢 Active"
-            html += f"""<div class='card' style="{'border:3px solid red' if is_locked(s) else ''}"><b>{s.get('name','')}</b> ({code}) - {lock} - Paid: {s.get('paid_until','?')} - Director: {s.get('director_phone','')} PIN:{get_admin_pin(s)}<br><form method='post' action='/super/update_school/{code}' style='margin:10px 0;background:#FFF8E1;padding:10px;border-radius:10px' onsubmit="this.querySelector('button').disabled=true"><input name='school_name' value='{s.get('name','')}' required style='width:28%'><input name='director' value='{s.get('director_phone','')}' required style='width:28%'><input type='date' name='paid_until' value='{s.get('paid_until','')}' required style='width:28%'><button>Save Edit ✅</button></form><a href='/admin/{code}'>Manage (PIN)</a> | <a href='/report/{code}'>Daily</a> | <a href='/report/{code}/weekly'>Weekly</a> | <a href='/super/delete_school/{code}' onclick="return confirm('DELETE {code}?')" style='color:red'>Delete ❌</a><br><br><button onclick="shareAdmin('{code}','{s.get('name','')}','{s.get('director_phone','')}','{get_admin_pin(s)}')" class="btn-blue">📲 Share Admin + PIN</button><br>"""
+            html += f"""<div class='card' style="{'border:3px solid red' if is_locked(s) else ''}"><b>{s.get('name','')}</b> ({code}) - {lock} - Paid: {s.get('paid_until','?')} - Director: {s.get('director_phone','')} PIN:{get_admin_pin(s)}<br> <form method='post' action='/super/update_school/{code}' style='margin:10px 0;background:#FFF8E1;padding:10px;border-radius:10px' onsubmit="this.querySelector('button').disabled=true"> <b>Edit School:</b><br><input name='school_name' value='{s.get('name','')}' required style='width:28%'><input name='director' value='{s.get('director_phone','')}' required style='width:28%'><input type='date' name='paid_until' value='{s.get('paid_until','')}' required style='width:28%'><button>Save Edit ✅</button></form> <a href='/admin/{code}'>Manage (PIN)</a> | <a href='/report/{code}'>Daily</a> | <a href='/report/{code}/weekly'>Weekly</a> | <a href='/super/delete_school/{code}' onclick="return confirm('DELETE {code}?')" style='color:red'>Delete ❌</a><br><br> <button onclick="shareAdmin('{code}','{s.get('name','')}','{s.get('director_phone','')}','{get_admin_pin(s)}')" class="btn-blue">📲 Share Admin + PIN</button><br>"""
             for vp, van in (s.get('vans',{}) or {}).items():
                 html += f"Van <b>{vp}</b> - {(van or {}).get('driver_name','')} PIN:{get_van_pin(van)} - <a href='/driver/{code}/{vp}'>Driver</a><br>"
             html += "</div>"
         html += """<script>function toWa(phone){let c=(phone||'').replace(/[^0-9]/g,'').trim();if(c.startsWith('0'))c='256'+c.substring(1);if(c.length==9)c='256'+c;return c;} function shareAdmin(code,name,phone,pin){let link=window.location.origin+"/admin/"+code;let msg="FIKISHA Admin link for "+name+" ("+code+"): "+link+"\\nPIN: "+pin;let clean=toWa(phone);window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");}</script>"""
         return html
-    except Exception as e: return CSS + f"<div class='card'><h2>Error</h2><p>{e}</p></div>"
+    except Exception as e:
+        return CSS + f"<div class='card'><h2>Super Admin Error</h2><p>{e}</p></div>"
 
 @app.route("/create_school", methods=["POST"])
 def create_school():
-    code = normalize_code(request.form.get('code',''))
-    safe_post(f"{SUPABASE_URL}/rest/v1/schools", headers=hr(), json={"code": code, "name": request.form.get('school_name','School'), "director_phone": request.form.get('director',''), "paid_until": request.form.get('paid_until', str(date.today()))})
-    return redirect("/")
+    try:
+        code = normalize_code(request.form.get('code',''))
+        if not code: return "Code required"
+        safe_post(f"{SUPABASE_URL}/rest/v1/schools", headers=hr(), json={"code": code, "name": request.form.get('school_name','School'), "director_phone": request.form.get('director',''), "paid_until": request.form.get('paid_until', str(date.today()))})
+        return redirect("/")
+    except Exception as e:
+        return f"Create error {e} <a href='/'>back</a>"
 
 @app.route("/super/update_school/<code>", methods=["POST"])
 def update_school(code):
@@ -178,15 +237,17 @@ def update_school(code):
 
 @app.route("/super/delete_school/<code>")
 def delete_school(code):
-    code_n = normalize_code(code)
-    safe_delete(f"{SUPABASE_URL}/rest/v1/schools?code=eq.{quote(code_n)}", headers=h())
-    safe_delete(f"{SUPABASE_URL}/rest/v1/vans?school_code=eq.{quote(code_n)}", headers=h())
-    safe_delete(f"{SUPABASE_URL}/rest/v1/kids?school_code=eq.{quote(code_n)}", headers=h())
-    safe_delete(f"{SUPABASE_URL}/rest/v1/attendance_log?school_code=eq.{quote(code_n)}", headers=h())
+    try:
+        code_n = normalize_code(code)
+        safe_delete(f"{SUPABASE_URL}/rest/v1/schools?code=eq.{quote(code_n)}", headers=h())
+        safe_delete(f"{SUPABASE_URL}/rest/v1/vans?school_code=eq.{quote(code_n)}", headers=h())
+        safe_delete(f"{SUPABASE_URL}/rest/v1/kids?school_code=eq.{quote(code_n)}", headers=h())
+        safe_delete(f"{SUPABASE_URL}/rest/v1/attendance_log?school_code=eq.{quote(code_n)}", headers=h())
+    except: pass
     return redirect("/")
-ADMIN_LOGIN_HTML = CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 Admin PIN for {{school_name}} ({{code}})</h2><form method="post" id="pinForm"><input name="pin" type="password" placeholder="4-digit PIN" required style="text-align:center;font-size:22px;letter-spacing:8px" maxlength="4"><br><button style="width:95%" id="pinBtn">Unlock Admin</button></form>{% if error %}<p style="color:red">{{error}}</p>{% endif %}</div><script>document.getElementById('pinForm').addEventListener('submit',function(){document.getElementById('pinBtn').disabled=true;});</script>"""
+ADMIN_LOGIN_HTML = CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 Admin PIN for {{school_name}} ({{code}})</h2><form method="post" id="pinForm"><input name="pin" type="password" placeholder="4-digit PIN" required style="text-align:center;font-size:22px;letter-spacing:8px" maxlength="4"><br><button style="width:95%" id="pinBtn">Unlock Admin</button></form><p style="font-size:12px;color:#666">Super password also works</p>{% if error %}<p style="color:red">{{error}}</p>{% endif %}</div><script>document.getElementById('pinForm').addEventListener('submit',function(){document.getElementById('pinBtn').disabled=true;});</script>"""
 
-ADMIN_HTML = CSS + """ {% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1></div>{% endif %} <h2>{{school_name}} Admin ({{code}}) - <a href="/admin/{{code}}/logout" style="font-size:12px">Logout PIN</a></h2> <p>{{kampala_time}} | FINAL ✅ | <a href="/report/{{code}}">Daily</a> | <a href="/report/{{code}}/weekly">Weekly 📊</a></p> <div class="card"><h3>Daily Control</h3>{% if locked %}<button disabled>🔒 Locked</button>{% else %}<form method="post" action="/api/{{code}}/reset_all" onsubmit="return confirmReset(this)"><button style="background:#0a7a2a;width:100%" id="resetBtn">RESET ALL FOR TOMORROW</button></form>{% endif %}</div> <div class="card"><h3>Add Van</h3>{% if locked %}<p>🔒 Locked</p>{% else %}<form method="post" action="/admin/{{code}}/add_van" class="anti-spam-form"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form>{% endif %}</div> <div class="card"><h3>Add Kid (Unlimited)</h3>{% if locked %}<p>🔒 Locked</p>{% elif vans_count==0 %}<p>Add Van first!</p>{% else %}<form method="post" action="/admin/{{code}}/add_kid" class="anti-spam-form"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form>{% endif %}</div> <hr><h3>Vans & Kids ({{total_kids}}) - Only {{code}}</h3> {% for vp, van in vans_items %} <div class="card"><b>{{vp}} - {{van.driver_name}}</b> - {{van.driver_phone}} - PIN: {{van.pin}} - <a href="/driver/{{code}}/{{vp}}">Driver Page</a><br> {% if not locked %}<form method="post" action="/admin/{{code}}/edit_van/{{vp}}" class="anti-spam-form" style="background:#FFF8E1;padding:8px;border-radius:8px;margin:8px 0"><input name="driver_name" value="{{van.driver_name}}" required style="width:30%"> <input name="driver_phone" value="{{van.driver_phone}}" required style="width:35%"> <button>Save Van</button> | <a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}?')" style="color:red">Delete Van ❌</a></form>{% endif %} {% for kid in kids_list if kid.van_plate==vp %} <div style="margin:8px 0;padding:10px;background:#FFF8E1;border-radius:10px"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>👦 <b>{{kid.name}}</b> ({{kid.stage}}) - {{kid.status_short}}<br>Parent: {{kid.parent_phone}} | <a href="/p/{{kid.id}}" target="_blank">Parent Link 👁️</a></span><div><button onclick="shareParent('{{kid.name}}','{{kid.id}}','{{kid.parent_phone}}')" class="btn-blue" style="padding:6px 10px;font-size:11px">📲 Share Parent</button>{% if not locked %}<a href="#" onclick="document.getElementById('edit-{{kid.id}}').style.display='block';return false;">✏️ Edit</a> | <a href="/admin/{{code}}/delete_kid/{{kid.id}}" onclick="return confirm('Delete {{kid.name}}?')" style="color:red;font-size:11px">❌ Delete</a>{% endif %}</div></div> {% if not locked %}<div id="edit-{{kid.id}}" style="display:none;background:white;padding:8px;border-radius:8px;margin-top:8px"><form method="post" action="/admin/{{code}}/edit_kid/{{kid.id}}" class="anti-spam-form"><input name="kid_name" value="{{kid.name}}" required style="width:22%"> <input name="stage" value="{{kid.stage}}" style="width:18%"> <input name="parent_phone" value="{{kid.parent_phone}}" required style="width:28%"><select name="van_plate" style="width:18%">{% for vvp in vans %}<option value="{{vvp}}" {% if vvp==kid.van_plate %}selected{% endif %}>{{vvp}}</option>{% endfor %}</select><button>Save Kid</button></form></div>{% endif %}</div> {% endfor %}</div>{% endfor %} <script>function toWa(phone){let c=(phone||'').replace(/[^0-9]/g,'').trim();if(c.startsWith('0'))c='256'+c.substring(1);if(c.length==9)c='256'+c;return c;} function shareParent(name,kidId,phone){let clean=toWa(phone);let link=window.location.origin+"/p/"+kidId;let msg="Hello, track "+name+" live: "+link;window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");} function confirmReset(form){if(!confirm('RESET ALL?'))return false;form.querySelector('button').disabled=true;return true;} document.querySelectorAll('.anti-spam-form').forEach(f=>{f.addEventListener('submit',function(){let btn=this.querySelector('button');if(btn.disabled)return false;btn.disabled=true;btn.innerText='Saving...';setTimeout(()=>{btn.disabled=false;},3000);});});</script> """
+ADMIN_HTML = CSS + """ {% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1></div>{% endif %} <h2>{{school_name}} Admin ({{code}}) - <a href="/admin/{{code}}/logout" style="font-size:12px">Logout PIN</a></h2> <p>{{kampala_time}} | ARMOR + Unlimited ✅ | <a href="/report/{{code}}">Daily</a> | <a href="/report/{{code}}/weekly">Weekly 📊</a></p> <div class="card"><h3>Daily Control</h3>{% if locked %}<button disabled>🔒 Locked</button>{% else %}<form method="post" action="/api/{{code}}/reset_all" onsubmit="return confirmReset(this)"><button style="background:#0a7a2a;width:100%" id="resetBtn">RESET ALL FOR TOMORROW</button></form>{% endif %}</div> <div class="card"><h3>Add Van</h3>{% if locked %}<p>🔒 Locked</p>{% else %}<form method="post" action="/admin/{{code}}/add_van" class="anti-spam-form"><input name="plate" placeholder="Plate UAA123A" required><input name="driver_name" placeholder="Driver Name" required><input name="driver_phone" placeholder="Driver Phone 2567..." required><button>Add Van</button></form>{% endif %}</div> <div class="card"><h3>Add Kid (Unlimited)</h3>{% if locked %}<p>🔒 Locked</p>{% elif vans_count==0 %}<p>Add Van first!</p>{% else %}<form method="post" action="/admin/{{code}}/add_kid" class="anti-spam-form"><input name="kid_name" placeholder="Kid Name" required><input name="stage" placeholder="Stage" required><input name="parent_phone" placeholder="Parent WhatsApp 2567..." required>Van: <select name="van_plate" required>{% for vp in vans %}<option value="{{vp}}">{{vp}}</option>{% endfor %}</select><button>Add Kid</button></form>{% endif %}</div> <hr><h3>Vans & Kids ({{total_kids}}) - Only {{code}}</h3> {% for vp, van in vans_items %} <div class="card"><b>{{vp}} - {{van.driver_name}}</b> - {{van.driver_phone}} - PIN: {{van.pin}} - <a href="/driver/{{code}}/{{vp}}">Driver Page</a><br> <div style="margin:8px 0"><button onclick="shareDriver('{{vp}}','{{van.driver_name}}','{{van.driver_phone}}','{{van.pin}}','{{code}}')" class="btn-done">📲 Share Driver + PIN</button> <button onclick="copyLink(window.location.origin+'/driver/{{code}}/{{vp}}')" class="btn-blue">🔗 Copy</button></div> {% if not locked %}<form method="post" action="/admin/{{code}}/edit_van/{{vp}}" class="anti-spam-form" style="background:#FFF8E1;padding:8px;border-radius:8px;margin:8px 0"><input name="driver_name" value="{{van.driver_name}}" required style="width:30%"> <input name="driver_phone" value="{{van.driver_phone}}" required style="width:35%"> <button>Save Van</button> | <a href="/admin/{{code}}/delete_van/{{vp}}" onclick="return confirm('Delete van {{vp}}?')" style="color:red">Delete Van ❌</a></form>{% endif %} {% for kid in kids_list if kid.van_plate==vp %} <div style="margin:8px 0;padding:10px;background:#FFF8E1;border-radius:10px"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><span>👦 <b>{{kid.name}}</b> ({{kid.stage}}) - {{kid.status_short}}<br>Parent: {{kid.parent_phone}} | <a href="/p/{{kid.id}}" target="_blank">Parent Link 👁️</a></span><div><button onclick="shareParent('{{kid.name}}','{{kid.id}}','{{kid.parent_phone}}')" class="btn-blue" style="padding:6px 10px;font-size:11px">📲 Share Parent</button>{% if not locked %}<a href="#" onclick="document.getElementById('edit-{{kid.id}}').style.display='block';return false;">✏️ Edit</a> | <a href="/admin/{{code}}/delete_kid/{{kid.id}}" onclick="return confirm('Delete {{kid.name}}?')" style="color:red;font-size:11px">❌ Delete</a>{% endif %}</div></div> {% if not locked %}<div id="edit-{{kid.id}}" style="display:none;background:white;padding:8px;border-radius:8px;margin-top:8px"><form method="post" action="/admin/{{code}}/edit_kid/{{kid.id}}" class="anti-spam-form"><input name="kid_name" value="{{kid.name}}" required style="width:22%"> <input name="stage" value="{{kid.stage}}" style="width:18%"> <input name="parent_phone" value="{{kid.parent_phone}}" required style="width:28%"><select name="van_plate" style="width:18%">{% for vvp in vans %}<option value="{{vvp}}" {% if vvp==kid.van_plate %}selected{% endif %}>{{vvp}}</option>{% endfor %}</select><button>Save Kid</button> <button type="button" onclick="document.getElementById('edit-{{kid.id}}').style.display='none'" class="btn-grey">Cancel</button></form></div>{% endif %}</div> {% endfor %}</div>{% endfor %} <script> function toWa(phone){let c=(phone||'').replace(/[^0-9]/g,'').trim();if(c.startsWith('0'))c='256'+c.substring(1);if(c.length==9)c='256'+c;return c;} function shareParent(name,kidId,phone){let clean=toWa(phone);let link=window.location.origin+"/p/"+kidId;let msg="Hello, track "+name+" live on FIKISHA: "+link;if(clean.length<11){alert('Phone wrong');return;}window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");} function shareDriver(plate, driverName, driverPhone, pin, code){let clean=toWa(driverPhone);let link=window.location.origin+"/driver/"+code+"/"+plate;let msg="Hello "+driverName+", van "+plate+": "+link+"\\nPIN: "+pin;window.open("https://wa.me/"+clean+"?text="+encodeURIComponent(msg),"_blank");} function copyLink(text){navigator.clipboard.writeText(text).then(()=>{alert('Copied');});} function confirmReset(form){if(!confirm('RESET ALL?'))return false;form.querySelector('button').disabled=true;form.querySelector('button').innerText='Resetting...';return true;} document.querySelectorAll('.anti-spam-form').forEach(f=>{f.addEventListener('submit',function(){let btn=this.querySelector('button');if(btn.disabled)return false;btn.disabled=true;btn.innerText='Saving...';setTimeout(()=>{btn.disabled=false;btn.innerText=btn.innerText.replace('Saving...','Save');},3000);});}); </script> """
 
 @app.route("/admin/<code>", methods=["GET", "POST"])
 def admin(code):
@@ -200,9 +261,9 @@ def admin(code):
             if entered == real_pin or entered == SUPER_ADMIN_PASSWORD:
                 resp = make_response(redirect(f"/admin/{code_norm}")); resp.set_cookie(f"admin_pin_{code_norm}", real_pin, max_age=86400*30, httponly=True, samesite='Lax'); return resp
             else:
-                from jinja2 import Template; return Template(ADMIN_LOGIN_HTML).render(school_name=school.get('name',''), code=code_norm, error="Wrong PIN")
+                from jinja2 import Template; return Template(ADMIN_LOGIN_HTML).render(school_name=school.get('name',''), code=code_norm, director_phone=school.get('director_phone',''), error="Wrong PIN")
         if admin_cookie!= real_pin and super_auth!= SUPER_ADMIN_PASSWORD:
-            from jinja2 import Template; return Template(ADMIN_LOGIN_HTML).render(school_name=school.get('name',''), code=code_norm, error=None)
+            from jinja2 import Template; return Template(ADMIN_LOGIN_HTML).render(school_name=school.get('name',''), code=code_norm, director_phone=school.get('director_phone',''), error=None)
         vans_raw = db_get_vans(code_norm)
         vans = {v['plate']: v for v in vans_raw}
         for v in vans.values():
@@ -219,7 +280,8 @@ def admin(code):
             kids_list.append(kid)
         from jinja2 import Template
         return Template(ADMIN_HTML).render(school_name=school.get('name',''), school_paid_until=school.get('paid_until',''), code=code_norm, locked=is_locked(school), kampala_time=current_time_str(), total_kids=len(kids_list), vans=vans.keys(), vans_items=vans_items, kids_list=kids_list, vans_count=len(vans))
-    except Exception as e: return CSS + f"<div class='card'><h2>Admin Error</h2><p>{e}</p></div>"
+    except Exception as e:
+        return CSS + f"<div class='card'><h2>Admin Error</h2><p>{e}</p><a href='/'>Home</a></div>"
 
 @app.route("/admin/<code>/logout")
 def admin_logout(code):
@@ -276,7 +338,8 @@ def add_kid_route(code):
         if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
         van_plate = normalize_plate(request.form.get('van_plate',''))
         safe_post(f"{SUPABASE_URL}/rest/v1/kids", headers=h(), json={"id": kid_id, "school_code": code_norm, "name": request.form.get('kid_name','Kid'), "stage": request.form.get('stage',''), "parent_phone": request.form.get('parent_phone',''), "van_plate": van_plate, "status": "At Home - waiting for van", "times": {}, "absent": False})
-    except: pass
+    except Exception as e:
+        print(f"add_kid {e}")
     return redirect(f"/admin/{normalize_code(code)}")
 
 @app.route("/admin/<code>/edit_kid/<kid_id>", methods=["POST"])
@@ -303,82 +366,7 @@ def reset_all(code):
     return redirect(f"/admin/{normalize_code(code)}")
 DRIVER_PIN_HTML = CSS + """<div class='card' style='max-width:400px;margin:80px auto;text-align:center'><h2>🔐 Driver PIN for Van {{plate}}</h2><form method="post" id="pinForm"><input name="pin" type="password" placeholder="4-digit PIN" required style="text-align:center;font-size:22px;letter-spacing:8px" maxlength="4"><br><button style="width:95%" id="pinBtn">Unlock</button></form></div><script>document.getElementById('pinForm').addEventListener('submit',function(){document.getElementById('pinBtn').disabled=true;});</script>"""
 
-DRIVER_HTML = CSS + """<link rel="manifest" href="/manifest.json">{% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1></div>{% endif %}<h2>Driver: {{van.driver_name}} - Van {{van.plate}} - {{school_name}} - <a href="/driver/{{code}}/{{van.plate}}/logout" style="font-size:12px">Logout PIN</a></h2><div id="netStatus" style="padding:8px;border-radius:8px;text-align:center;font-weight:bold">Checking...</div><p>Code: {{code}} | {{kampala_time}} | {{today}} | {{kids|length}} kids - FINAL ✅</p>
-<div style="display:flex;gap:10px;justify-content:space-between;flex-wrap:nowrap">
-<div class="card" style="flex:1;min-width:0;border:2px solid #0a7a2a;background:#e8f5e9;margin:0;padding:10px">
-<h3 style="color:#0a7a2a;margin:0 0 8px 0;font-size:13px;text-align:center">🏫 Mass Actions</h3>
-<div style="display:flex;gap:8px">
-<button class="btn-done" onclick="massDrop('dropped_school')" {% if locked %}disabled{% endif %} id="massDropBtn" style="flex:1;font-size:11px;padding:12px 6px;border-radius:10px;line-height:1.2">🏫<br>DROP ALL<br><small>AT SCHOOL</small></button>
-<button class="btn-blue" onclick="massDrop('picked_school')" {% if locked %}disabled{% endif %} id="massPickBtn" style="flex:1;font-size:11px;padding:12px 6px;border-radius:10px;line-height:1.2;background:#1565c0;color:white">🚐<br>PICK ALL<br><small>AT SCHOOL</small></button>
-</div>
-<small style="font-size:10px;color:#555;display:block;text-align:center;margin-top:6px">Status + Progress + WhatsApp updated like single button</small>
-</div>
-<div style="width:8px;flex-shrink:0"></div>
-<div class="card" style="flex:1;min-width:0;border:2px solid #d32f2f;margin:0;padding:10px"><h3 style="color:#d32f2f;margin:0 0 8px 0;font-size:13px;text-align:center">🚨 Alert All Parents</h3><select id="trafficReason" {% if locked %}disabled{% endif %} style="width:100%;padding:8px;border:2px solid #d32f2f;font-size:11px"><option value="Heavy traffic - 15 mins late">Traffic - 15 mins late</option><option value="Heavy traffic - 30 mins late">Traffic - 30 mins late</option><option value="Tyre puncture - fixing, 20 mins delay">Puncture - 20 mins</option><option value="Fuel stop - 10 mins delay">Fuel - 10 mins</option><option value="custom">✏️ Custom message...</option></select><input id="trafficCustom" placeholder="Type custom e.g. Bridge closed - 25 mins delay" style="width:95%;display:none;margin-top:6px;border:2px solid #d32f2f" maxlength="100"><button class="btn-red" onclick="sendTraffic()" {% if locked %}disabled{% endif %} id="trafficBtn" style="width:100%;margin-top:8px;padding:10px;font-size:12px">🚨 SEND TO ALL PARENTS</button><small id="customHint" style="display:none;color:#d32f2f;font-size:10px">✏️ Custom active - type above (works!)</small></div></div>
-<hr><div class="grid">{% for kid_id, kid in kids.items() %}<div class="card"><b>{{kid.name}}</b> - {{kid.stage}}<br>Status: <span class="badge">{{kid.status}}</span><div class="progress"><div class="progress-fill" style="width: {{kid.progress}}%"></div></div><small>{{kid.progress}}%</small><br><button onclick="action('{{kid.id}}','picked_home')" {% if locked %}disabled{% endif %} class="act-btn" data-kid="{{kid.id}}">PICKED HOME</button><button onclick="action('{{kid.id}}','dropped_school')" {% if locked %}disabled{% endif %} class="act-btn" data-kid="{{kid.id}}">DROPPED SCHOOL</button><button onclick="action('{{kid.id}}','picked_school')" {% if locked %}disabled{% endif %} class="act-btn" data-kid="{{kid.id}}">PICKED SCHOOL</button><button onclick="action('{{kid.id}}','dropped_home')" {% if locked %}disabled{% endif %} class="act-btn" data-kid="{{kid.id}}">DROPPED HOME</button><br><button class="btn-orange act-btn" onclick="action('{{kid.id}}','absent')" {% if locked %}disabled{% endif %} data-kid="{{kid.id}}">ABSENT</button><button class="btn-grey act-btn" onclick="action('{{kid.id}}','present')" {% if locked %}disabled{% endif %} data-kid="{{kid.id}}">BACK</button></div>{% endfor %}</div>
-<script>
- if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(()=>{}); }
- let queue = JSON.parse(localStorage.getItem('fikisha_queue_{{van.plate}}')||'[]');
- if(queue.length>100){ queue=queue.slice(-100); localStorage.setItem('fikisha_queue_{{van.plate}}', JSON.stringify(queue)); }
- function updateNet(){let el=document.getElementById('netStatus');if(navigator.onLine){el.innerText='✅ ONLINE | Queued: '+queue.length;el.style.background='#e8f5e9';if(queue.length>0)syncQueue();}else{el.innerText='⚠️ OFFLINE - saved | Queued: '+queue.length;el.style.background='#fff3cd';}}
- window.addEventListener('online', updateNet); window.addEventListener('offline', updateNet); updateNet();
- function saveQueue(){if(queue.length>100)queue=queue.slice(-100);localStorage.setItem('fikisha_queue_{{van.plate}}', JSON.stringify(queue));updateNet();}
- let tapping = {};
- function action(kid_id, act){
-  {% if locked %} return; {% endif %}
-  let key = kid_id + '_' + act; if(tapping[key]) return; tapping[key]=true;
-  let btns=document.querySelectorAll(`button[data-kid='${kid_id}']`); btns.forEach(b=>{b.disabled=true; b.style.opacity='0.4';});
-  let targetBtn = document.querySelector(`button[onclick*="'${kid_id}','${act}'"]`); if(targetBtn) targetBtn.innerText='⏳...';
-  queue.push({kid_id, action:act, time: new Date().toISOString()}); saveQueue();
-  if(navigator.onLine){
-    fetch('/api/{{code}}/{{van.plate}}/action', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({kid_id, action:act})}).then(r=>r.json()).then(j=>{
-      if(j.cooldown){ alert('Wait 3 sec!'); btns.forEach(b=>{b.disabled=false; b.style.opacity='1';}); tapping[key]=false; return;}
-      queue=queue.filter(q=>!(q.kid_id==kid_id && q.action==act)); saveQueue(); location.reload();
-    }).catch(()=>{ location.reload();});
-  }else{ setTimeout(()=>location.reload(),500);}
-  setTimeout(()=>{tapping[key]=false;},3000);
- }
- function syncQueue(){if(queue.length==0||!navigator.onLine)return;fetch('/api/{{code}}/{{van.plate}}/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items: queue})}).then(r=>r.json()).then(j=>{if(j.ok){queue=[];saveQueue();}});}
- let massTapping=false;
- function massDrop(act){
-  {% if locked %} return; {% endif %}
-  if(massTapping) return;
-  let label = act=='dropped_school'? 'DROP ALL kids at school? Status will become At School + 50% progress' : 'PICK ALL kids at school? Status will become On way Home + 75% progress';
-  if(!confirm(label))return;
-  if(!navigator.onLine){alert('Need internet for mass');return;}
-  massTapping=true;
-  let btnId = act=='dropped_school'? 'massDropBtn' : 'massPickBtn';
-  let btn=document.getElementById(btnId);
-  let otherId = act=='dropped_school'? 'massPickBtn' : 'massDropBtn';
-  let otherBtn=document.getElementById(otherId);
-  if(btn) {btn.disabled=true; btn.innerText='⏳...';}
-  if(otherBtn) otherBtn.disabled=true;
-  fetch('/api/{{code}}/{{van.plate}}/mass', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:act})}).then(r=>r.json()).then(j=>{
-    if(j.cooldown){alert(j.error); if(btn) {btn.disabled=false; btn.innerText= act=='dropped_school'? '🏫 DROP ALL AT SCHOOL' : '🚐 PICK ALL AT SCHOOL';} if(otherBtn) otherBtn.disabled=false; massTapping=false; return;}
-    if(j.ok){ alert('✅ Mass '+act+' done: '+j.count+' kids | Status + Progress updated!'); location.reload();} else {alert('Failed'); if(btn) btn.disabled=false; if(otherBtn) otherBtn.disabled=false; massTapping=false;}
-  }).catch(()=>{if(btn) btn.disabled=false; if(otherBtn) otherBtn.disabled=false; massTapping=false;});
- }
- let trafficTapping=false;
- function sendTraffic(){
-  {% if locked %} return; {% endif %}
-  if(trafficTapping) return;
-  let re=document.getElementById('trafficReason');let ce=document.getElementById('trafficCustom');let msg=re.value;
-  if(msg=='custom'){msg=ce.value.trim(); if(msg.length<5){alert('Type custom message 5+ chars'); ce.focus(); return;}}
-  if(!msg){return;}
-  if(!navigator.onLine){alert('Need internet');return;}
-  trafficTapping=true;
-  let btn = document.getElementById('trafficBtn'); btn.innerText='Sending...'; btn.disabled=true;
-  fetch('/api/{{code}}/{{van.plate}}/traffic', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: msg})}).then(r=>r.json()).then(j=>{
-    if(j.cooldown){ alert('Wait 5 mins - already sent!'); btn.innerText='Wait 5m'; setTimeout(()=>{btn.innerText='🚨 SEND TO ALL PARENTS'; btn.disabled=false; trafficTapping=false;},3000); return; }
-    btn.innerText='✅ Sent to '+ (j.count||0);
-    setTimeout(()=>{btn.innerText='🚨 SEND TO ALL PARENTS'; btn.disabled=false; trafficTapping=false;},2500);
-  }).catch(()=>{btn.innerText='🚨 SEND TO ALL PARENTS'; btn.disabled=false; trafficTapping=false;});
- }
- document.getElementById('trafficReason').addEventListener('change', function(){
-   let c=document.getElementById('trafficCustom');let h=document.getElementById('customHint');
-   if(this.value=='custom'){c.style.display='block';h.style.display='block';c.focus();}else{c.style.display='none';h.style.display='none';}
- });
-</script>"""
+DRIVER_HTML = CSS + """<link rel="manifest" href="/manifest.json">{% if locked %}<div class='card' style='background:#ffcccc;border:3px solid red;text-align:center'><h1>🚫 PAYMENT EXPIRED</h1></div>{% endif %}<h2>Driver: {{van.driver_name}} - Van {{van.plate}} - {{school_name}} - <a href="/driver/{{code}}/{{van.plate}}/logout" style="font-size:12px">Logout PIN</a></h2><div id="netStatus" style="padding:8px;border-radius:8px;text-align:center;font-weight:bold">Checking...</div><p>Code: {{code}} | {{kampala_time}} | {{today}} | {{kids|length}} kids - ARMOR ✅</p><div style="display:flex;gap:12px;justify-content:space-between;flex-wrap:nowrap"><div class="card" style="flex:1;min-width:0;border:2px solid #0a7a2a;background:#e8f5e9;margin:0"><h3 style="color:#0a7a2a;margin-top:0;font-size:13px;text-align:center">🏫 Quick Drop</h3><button class="btn-done" onclick="massDrop('dropped_school')" {% if locked %}disabled{% endif %} id="massBtn" style="width:100%;font-size:13px;padding:12px;border-radius:12px">🏫 DROP ALL AT SCHOOL</button></div><div style="width:12px;flex-shrink:0"></div><div class="card" style="flex:1;min-width:0;border:2px solid #d32f2f;margin:0"><h3 style="color:#d32f2f;margin-top:0;font-size:13px;text-align:center">🚨 Alert All Parents</h3><select id="trafficReason" {% if locked %}disabled{% endif %} style="width:100%;padding:8px;border:2px solid #d32f2f;font-size:11px"><option value="Heavy traffic - 15 mins late">Traffic - 15 mins late</option><option value="Heavy traffic - 30 mins late">Traffic - 30 mins late</option><option value="Tyre puncture - fixing, 20 mins delay">Puncture - 20 mins</option><option value="Fuel stop - 10 mins delay">Fuel - 10 mins</option><option value="custom">✏️ Custom</option></select><input id="trafficCustom" placeholder="Custom 80 chars" style="width:95%;display:none;margin-top:6px" maxlength="80"><button class="btn-red" onclick="sendTraffic()" {% if locked %}disabled{% endif %} id="trafficBtn" style="width:100%;margin-top:8px;padding:10px;font-size:12px">🚨 SEND TO ALL PARENTS</button></div></div><hr><div class="grid">{% for kid_id, kid in kids.items() %}<div class="card"><b>{{kid.name}}</b> - {{kid.stage}} - {{kid.parent_phone}}<br>Status: <span class="badge">{{kid.status}}</span><div class="progress"><div class="progress-fill" style="width: {{kid.progress}}%"></div></div><br><button onclick="action('{{kid.id}}','picked_home')" {% if locked %}disabled{% endif %} class="act-btn" data-kid="{{kid.id}}">PICKED HOME</button><button onclick="action('{{kid.id}}','dropped_school')" {% if locked %}disabled{% endif %} class="act-btn" data-kid="{{kid.id}}">DROPPED SCHOOL</button><button onclick="action('{{kid.id}}','picked_school')" {% if locked %}disabled{% endif %} class="act-btn" data-kid="{{kid.id}}">PICKED SCHOOL</button><button onclick="action('{{kid.id}}','dropped_home')" {% if locked %}disabled{% endif %} class="act-btn" data-kid="{{kid.id}}">DROPPED HOME</button><br><button class="btn-orange act-btn" onclick="action('{{kid.id}}','absent')" {% if locked %}disabled{% endif %} data-kid="{{kid.id}}">ABSENT</button><button class="btn-grey act-btn" onclick="action('{{kid.id}}','present')" {% if locked %}disabled{% endif %} data-kid="{{kid.id}}">BACK</button></div>{% endfor %}</div><script> if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(()=>{}); } let queue = JSON.parse(localStorage.getItem('fikisha_queue_{{van.plate}}')||'[]'); if(queue.length>100){ queue=queue.slice(-100); localStorage.setItem('fikisha_queue_{{van.plate}}', JSON.stringify(queue)); } function updateNet(){let el=document.getElementById('netStatus');if(navigator.onLine){el.innerText='✅ ONLINE | Queued: '+queue.length;el.style.background='#e8f5e9';if(queue.length>0)syncQueue();}else{el.innerText='⚠️ OFFLINE - saved | Queued: '+queue.length;el.style.background='#fff3cd';}} window.addEventListener('online', updateNet); window.addEventListener('offline', updateNet); updateNet(); function saveQueue(){if(queue.length>100)queue=queue.slice(-100);localStorage.setItem('fikisha_queue_{{van.plate}}', JSON.stringify(queue));updateNet();} let tapping = {}; function action(kid_id, act){ {% if locked %} return; {% endif %} let key = kid_id + '_' + act; if(tapping[key]) return; tapping[key]=true; let btns=document.querySelectorAll(`button[data-kid='${kid_id}']`); btns.forEach(b=>{b.disabled=true; b.style.opacity='0.4';}); let targetBtn = document.querySelector(`button[onclick*="'${kid_id}','${act}'"]`); if(targetBtn) targetBtn.innerText='⏳...'; queue.push({kid_id, action:act, time: new Date().toISOString()}); saveQueue(); if(navigator.onLine){fetch('/api/{{code}}/{{van.plate}}/action', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({kid_id, action:act})}).then(r=>r.json()).then(j=>{ if(j.cooldown){ alert('Wait 3 sec! Anti-spam'); btns.forEach(b=>{b.disabled=false; b.style.opacity='1';}); tapping[key]=false; return; } queue=queue.filter(q=>!(q.kid_id==kid_id && q.action==act)); saveQueue(); location.reload();}).catch(()=>{ location.reload();});}else{ setTimeout(()=>location.reload(),500);} setTimeout(()=>{tapping[key]=false;},3000);} function syncQueue(){if(queue.length==0||!navigator.onLine)return;fetch('/api/{{code}}/{{van.plate}}/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items: queue})}).then(r=>r.json()).then(j=>{if(j.ok){queue=[];saveQueue();}});} let massTapping=false; function massDrop(act){ {% if locked %} return; {% endif %} if(massTapping) return; if(!confirm('DROP ALL at school?'))return; if(!navigator.onLine){return;} massTapping=true; let btn=document.getElementById('massBtn'); btn.disabled=true; btn.innerText='⏳ Dropping...'; fetch('/api/{{code}}/{{van.plate}}/mass', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:act})}).then(r=>r.json()).then(j=>{ if(j.cooldown){alert(j.error); btn.disabled=false; btn.innerText='🏫 DROP ALL AT SCHOOL'; massTapping=false; return;} location.reload();}).catch(()=>{btn.disabled=false; massTapping=false;});} let trafficTapping=false; function sendTraffic(){ {% if locked %} return; {% endif %} if(trafficTapping) return; let re=document.getElementById('trafficReason');let ce=document.getElementById('trafficCustom');let msg=re.value;if(msg=='custom'){msg=ce.value.trim();}if(!msg){return;}if(!navigator.onLine){return;} trafficTapping=true; let btn = document.getElementById('trafficBtn'); btn.innerText='Sending...'; btn.disabled=true; fetch('/api/{{code}}/{{van.plate}}/traffic', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: msg})}).then(r=>r.json()).then(j=>{ if(j.cooldown){ alert('Wait 5 mins - already sent!'); btn.innerText='Wait 5m'; setTimeout(()=>{btn.innerText='🚨 SEND TO ALL PARENTS'; btn.disabled=false; trafficTapping=false;},3000); return; } btn.innerText='✅ Sent'; setTimeout(()=>{btn.innerText='🚨 SEND TO ALL PARENTS'; btn.disabled=false; trafficTapping=false;},2000);}).catch(()=>{btn.innerText='🚨 SEND TO ALL PARENTS'; btn.disabled=false; trafficTapping=false;});} document.getElementById('trafficReason').addEventListener('change', function(){let c=document.getElementById('trafficCustom');if(this.value=='custom'){c.style.display='block';}else{c.style.display='none';}}); </script>"""
 
 @app.route("/driver/<code>/<plate>", methods=["GET", "POST"])
 def driver_page(code, plate):
@@ -413,7 +401,8 @@ def driver_page(code, plate):
             kid['progress']=cnt
         from jinja2 import Template
         return Template(DRIVER_HTML).render(school_name=school.get('name',''), van=van, code=code_norm, kids=kids, locked=locked, today=str(date.today()), kampala_time=current_time_str())
-    except Exception as e: return CSS + f"<div class='card'><h2>Driver Error</h2><p>{e}</p></div>"
+    except Exception as e:
+        return CSS + f"<div class='card'><h2>Driver Error</h2><p>{e}</p></div>"
 
 @app.route("/driver/<code>/<plate>/logout")
 def driver_logout(code, plate):
@@ -427,18 +416,23 @@ def driver_action(code, plate):
         if not school: return jsonify({"ok": False}), 404
         if is_locked(school): return jsonify({"locked": True}), 403
         cookie_pin = request.cookies.get(f"driver_pin_{plate_norm}"); vans = db_get_vans(code_norm); van = next((v for v in vans if v['plate']==plate_norm), None)
-        if not van or cookie_pin!= get_van_pin(van): return jsonify({"ok": False}), 401
+        if not van or cookie_pin!= get_van_pin(van): return jsonify({"ok": False, "error":"PIN"}), 401
         data = request.get_json() or {}; kid_id = data.get('kid_id'); act = data.get('action')
         if not kid_id or not act: return jsonify({"ok": False}), 400
+        # ARMOR - anti-spam 3 sec per kid
         key = f"{code_norm}_{plate_norm}_{kid_id}_{act}"
-        if key in ACTION_COOLDOWN and time.time()-ACTION_COOLDOWN[key] < 3:
-            return jsonify({"ok": False, "cooldown": True}), 429
-        ACTION_COOLDOWN[key]=time.time()
+        now_ts = time.time()
+        if key in ACTION_COOLDOWN and now_ts - ACTION_COOLDOWN[key] < 3:
+            return jsonify({"ok": False, "cooldown": True, "error": "Wait 3 sec"}), 429
+        ACTION_COOLDOWN[key]=now_ts
         r=safe_get(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(code_norm)}&select=*", headers=h())
         if not r or not r.json(): return jsonify({"ok": False}), 404
         kid = r.json()[0]
         times = kid.get('times',{}) or {}
-        if act in times and act not in ['present','absent']: return jsonify({"ok": True, "skipped": True})
+        if act in times and act not in ['present','absent']:
+            return jsonify({"ok": True, "skipped": True})
+        if act == 'absent' and kid.get('absent'): return jsonify({"ok": True, "skipped": True})
+        if act == 'present' and not kid.get('absent') and not times: return jsonify({"ok": True, "skipped": True})
         short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b")
         patch = {}
         if act == 'picked_home':
@@ -461,7 +455,8 @@ def driver_action(code, plate):
         safe_patch(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(code_norm)}", headers=h(), json=patch)
         safe_post(f"{SUPABASE_URL}/rest/v1/attendance_log", headers=h(), json={"school_code": code_norm, "kid_name": kid.get('name',''), "kid_id": kid_id, "van_plate": plate_norm, "action": act, "log_date": str(date.today()), "log_time": full})
         return jsonify({"ok": True})
-    except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/<code>/<plate>/mass", methods=["POST"])
 def mass_action(code, plate):
@@ -473,11 +468,11 @@ def mass_action(code, plate):
         if not van or cookie_pin!= get_van_pin(van): return jsonify({"ok": False}), 401
         key=f"mass_{code_norm}_{plate_norm}"
         if key in ACTION_COOLDOWN and time.time()-ACTION_COOLDOWN[key] < 5:
-            return jsonify({"ok": False, "cooldown": True, "error":"Wait 5 sec - anti-spam"}), 429
+            return jsonify({"ok": False, "cooldown": True, "error":"Wait 5 sec"}), 429
         ACTION_COOLDOWN[key]=time.time()
         data = request.get_json() or {}; act = data.get('action',''); short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b")
-        kids = db_get_kids(code_norm, plate_norm); count=0
         if act == 'dropped_school':
+            kids = db_get_kids(code_norm, plate_norm); count=0
             for kid in kids:
                 if not kid or kid.get('absent'): continue
                 if 'dropped_school' in (kid.get('times',{}) or {}): continue
@@ -487,18 +482,9 @@ def mass_action(code, plate):
                 safe_post(f"{SUPABASE_URL}/rest/v1/attendance_log", headers=h(), json={"school_code": code_norm, "kid_name": kid.get('name',''), "kid_id": kid['id'], "van_plate": plate_norm, "action": "dropped_school (mass)", "log_date": str(date.today()), "log_time": full})
                 count+=1
             return jsonify({"ok": True, "count": count})
-        elif act == 'picked_school':
-            for kid in kids:
-                if not kid or kid.get('absent'): continue
-                if 'picked_school' in (kid.get('times',{}) or {}): continue
-                times = kid.get('times',{}) or {}; times['picked_school']=full
-                safe_patch(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid['id'])}&school_code=eq.{quote(code_norm)}", headers=h(), json={"status": f"On way Home - left at {short}", "times": times})
-                whatsapp_async(kid.get('parent_phone',''), "picked_school", [kid.get('name',''), short, plate_norm])
-                safe_post(f"{SUPABASE_URL}/rest/v1/attendance_log", headers=h(), json={"school_code": code_norm, "kid_name": kid.get('name',''), "kid_id": kid['id'], "van_plate": plate_norm, "action": "picked_school (mass)", "log_date": str(date.today()), "log_time": full})
-                count+=1
-            return jsonify({"ok": True, "count": count})
         return jsonify({"ok": False}), 400
-    except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/<code>/<plate>/traffic", methods=["POST"])
 def traffic(code, plate):
@@ -510,92 +496,189 @@ def traffic(code, plate):
         if not van or cookie_pin!= get_van_pin(van): return jsonify({"ok": False}), 401
         key=f"traffic_{code_norm}_{plate_norm}"
         if key in TRAFFIC_COOLDOWN and time.time()-TRAFFIC_COOLDOWN[key] < 300:
-            return jsonify({"ok": False, "cooldown": True}), 429
+            return jsonify({"ok": False, "cooldown": True, "error": "Wait 5 min"}), 429
         raw_msg = (request.get_json() or {}).get('message','').strip()
         if not raw_msg or len(raw_msg) < 5: return jsonify({"ok": False}), 400
-        clean_msg = raw_msg[:100]
+        clean_msg = raw_msg[:100].strip()
         TRAFFIC_COOLDOWN[key]=time.time()
-        kids = db_get_kids(code_norm, plate_norm)
-        count=0
+        kids = db_get_kids(code_norm, plate_norm); sent=0
         for kid in kids:
-            if not kid: continue
-            whatsapp_async(kid.get('parent_phone',''), "traffic_alert", [kid.get('name',''), clean_msg, plate_norm])
-            count+=1
-        safe_post(f"{SUPABASE_URL}/rest/v1/attendance_log", headers=h(), json={"school_code": code_norm, "kid_name": f"ALL {plate_norm}", "kid_id": "TRAFFIC", "van_plate": plate_norm, "action": f"traffic: {clean_msg}", "log_date": str(date.today()), "log_time": kampala_now().strftime("%I:%M %p %d %b")})
-        return jsonify({"ok": True, "count": count})
-    except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
+            if not kid or kid.get('absent'): continue
+            whatsapp_async(kid.get('parent_phone',''), "traffic_alert", [plate_norm, clean_msg]); sent+=1
+        return jsonify({"sent": True, "count": sent})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/<code>/<plate>/sync", methods=["POST"])
-def sync(code, plate):
+def bulk_sync(code, plate):
     try:
         code_norm = normalize_code(code); plate_norm = normalize_plate(plate)
         school = db_get_school(code_norm)
-        if not school or is_locked(school): return jsonify({"ok": False}), 403
-        data = request.get_json() or {}; items = data.get('items',[]) or []
-        for it in items[:100]:
-            kid_id = it.get('kid_id'); act = it.get('action')
-            if not kid_id or not act: continue
+        if not school or is_locked(school): return jsonify({"locked": True}), 403
+        cookie_pin = request.cookies.get(f"driver_pin_{plate_norm}"); vans = db_get_vans(code_norm); van = next((v for v in vans if v['plate']==plate_norm), None)
+        if not van or cookie_pin!= get_van_pin(van): return jsonify({"ok": False}), 401
+        items = (request.get_json() or {}).get('items', []) or []
+        if len(items)>100: items=items[-100:]
+        short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b"); count=0; skipped=0
+        for it in items:
+            kid_id=it.get('kid_id'); act=it.get('action')
             r=safe_get(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(code_norm)}&select=*", headers=h())
             if not r or not r.json(): continue
-            kid = r.json()[0]; times = kid.get('times',{}) or {}
-            if act in times and act not in ['present','absent']: continue
-            short = kampala_now().strftime("%I:%M %p"); full = kampala_now().strftime("%I:%M %p %d %b")
+            kid=r.json()[0]
+            times = kid.get('times',{}) or {}
+            if act in times and act not in ['present','absent']: skipped+=1; continue
             patch={}
-            if act=='picked_home': patch={"status": f"On way to School - picked at {short}", "times": {**times, "picked_home": full}, "absent": False}
-            elif act=='dropped_school': patch={"status": f"At School - arrived at {short}", "times": {**times, "dropped_school": full}}
-            elif act=='picked_school': patch={"status": f"On way Home - left at {short}", "times": {**times, "picked_school": full}}
-            elif act=='dropped_home': patch={"status": f"Home Safe - {short}", "times": {**times, "dropped_home": full}, "dropped_home_ts": kampala_now().isoformat()}
-            elif act=='absent': patch={"status": "ABSENT Today", "absent": True}
-            elif act=='present': patch={"status": "At Home - waiting for van", "times": {}, "absent": False, "dropped_home_ts": None}
-            if patch: safe_patch(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(code_norm)}", headers=h(), json=patch)
-        return jsonify({"ok": True})
-    except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
+            if act=='picked_home':
+                patch["status"]=f"On way to School - picked at {short}"; times['picked_home']=full; patch["times"]=times; patch["absent"]=False
+                whatsapp_async(kid.get('parent_phone',''), "picked_home", [kid.get('name',''), short, plate_norm])
+            elif act=='dropped_school':
+                patch["status"]=f"At School - arrived at {short}"; times['dropped_school']=full; patch["times"]=times
+                whatsapp_async(kid.get('parent_phone',''), "dropped_school", [kid.get('name',''), short])
+            elif act=='picked_school':
+                patch["status"]=f"On way Home - left at {short}"; times['picked_school']=full; patch["times"]=times
+                whatsapp_async(kid.get('parent_phone',''), "picked_school", [kid.get('name',''), short, plate_norm])
+            elif act=='dropped_home':
+                patch["status"]=f"Home Safe - {short}"; times['dropped_home']=full; patch["times"]=times; patch["dropped_home_ts"]=kampala_now().isoformat()
+                whatsapp_async(kid.get('parent_phone',''), "dropped_home", [kid.get('name',''), short])
+            elif act=='absent':
+                patch["status"]="ABSENT Today"; patch["absent"]=True
+                whatsapp_async(kid.get('parent_phone',''), "absent", [kid.get('name',''), str(date.today()), plate_norm])
+            elif act=='present':
+                patch["absent"]=False; patch["status"]="At Home - waiting for van"; patch["times"]={}; patch["dropped_home_ts"]=None
+            if patch:
+                safe_patch(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(code_norm)}", headers=h(), json=patch)
+                safe_post(f"{SUPABASE_URL}/rest/v1/attendance_log", headers=h(), json={"school_code": code_norm, "kid_name": kid.get('name',''), "kid_id": kid_id, "van_plate": plate_norm, "action": act, "log_date": str(date.today()), "log_time": full})
+                count+=1
+        return jsonify({"ok": True, "count": count, "skipped": skipped})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/p/<kid_id>")
-def parent_page(kid_id):
+def parent_view(kid_id):
     try:
         r=safe_get(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&select=*", headers=h())
-        if not r or not r.json(): return CSS + "<div class='card'><h2>Kid not found</h2></div>"
-        kid = r.json()[0]
-        maybe_auto_reset(kid)
-        cnt=0
-        if 'picked_home' in (kid.get('times',{}) or {}): cnt=25
-        if 'dropped_school' in (kid.get('times',{}) or {}): cnt=50
-        if 'picked_school' in (kid.get('times',{}) or {}): cnt=75
-        if 'dropped_home' in (kid.get('times',{}) or {}): cnt=100
-        html = CSS + f"<h2>{kid.get('name','')} - {kid.get('status','')}</h2><div class='card'><div class='progress'><div class='progress-fill' style='width:{cnt}%'></div></div><p>{cnt}% complete</p><p>Status: {kid.get('status','')}</p>"
-        for k,v in (kid.get('times',{}) or {}).items(): html+=f"<p>{k}: {v}</p>"
-        html+="</div><script>setTimeout(()=>location.reload(),30000)</script>"
-        return html
-    except Exception as e: return CSS + f"<div class='card'><p>{e}</p></div>"
+        if not r or not r.json():
+            return CSS + "<div class='card' style='max-width:500px;margin:50px auto;text-align:center'><h2>🔍 Kid not found</h2></div>"
+        kid=r.json()[0]
+        school=db_get_school(kid['school_code'])
+        if is_locked(school):
+            return CSS + f"<div class='card' style='background:#ffcccc;text-align:center;max-width:500px;margin:50px auto'><h2>🔒 Service Paused</h2></div>"
+        vans=db_get_vans(kid['school_code']); van=next((v for v in vans if v['plate']==kid.get('van_plate','')), {}) or {}
+        if maybe_auto_reset(kid):
+            safe_patch(f"{SUPABASE_URL}/rest/v1/kids?id=eq.{quote(kid_id)}&school_code=eq.{quote(kid['school_code'])}", headers=h(), json={"times": kid['times'], "status": kid['status'], "absent": kid['absent'], "dropped_home_ts": None})
+        times = kid.get('times',{}) or {}
+        progress = len(times) * 25
+        timeline_html = ""
+        steps = [("picked_home", "🏠 Picked Home", "On the road"), ("dropped_school", "🏫 Dropped School", "Safe at school"), ("picked_school", "🚐 Picked School", "Heading home"), ("dropped_home", "✅ Dropped Home", "Home safe")]
+        for key, label, sub in steps:
+            done = key in times; icon = "✅" if done else "⭕"; t = times.get(key, "— waiting")
+            timeline_html += f"<div style='display:flex;gap:14px;margin:16px 0;opacity:{1 if done else 0.45};align-items:center'><div style='font-size:26px;width:32px;text-align:center'>{icon}</div><div><b>{label}</b><br><small style='color:#555'>{t} — {sub}</small></div></div>"
+        status_color = "#0a7a2a" if "Home Safe" in (kid.get('status','') or '') else "#0D2A54"
+        status_emoji = "✅" if progress>=100 else "👦"
+        driver_wa = to_wa(van.get('driver_phone',''))
+        return f"""{CSS}<meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="30"> <div style="max-width:500px;margin:0 auto"><div style="text-align:center;padding:12px"><h2 style="margin:5px">🚐 FIKISHA</h2><small>{(school.get('name','') or '')} | Van {kid.get('van_plate','')} | {current_time_str()}</small></div> <div class="card" style="border-top:7px solid {status_color};text-align:center;border-radius:20px"><div style="font-size:56px">{status_emoji}</div><h2 style="border:none;margin:12px 0">{kid.get('name','')}</h2><small>Stage {kid.get('stage','')} | ID {kid.get('id','')}</small><br><br><span class="badge" style="background:{status_color};padding:10px 18px;border-radius:30px">{kid.get('status','')}</span><div class="progress" style="height:16px;margin:22px 0;border-radius:20px"><div class="progress-fill" style="width:{progress}%"></div></div><small><b>{progress}% Complete</b></small></div> <div class="card" style="border-radius:20px"><h3>🛣️ Live Journey</h3>{timeline_html}</div> <div class="card" style="display:flex;gap:10px;border-radius:16px"><a href="tel:{van.get('driver_phone','')}" style="flex:1;text-align:center;background:#0D2A54;color:#FFC107;padding:14px;border-radius:12px;text-decoration:none">📞 Call Driver<br><small>{van.get('driver_name','Driver')}</small></a><a href="https://wa.me/{driver_wa}?text=Hello {van.get('driver_name','')} about {kid.get('name','')}" style="flex:1;text-align:center;background:#25D366;color:white;padding:14px;border-radius:12px;text-decoration:none">💬 WhatsApp<br><small>Driver</small></a></div></div>"""
+    except Exception as e:
+        return CSS + f"<div class='card'><h2>Error</h2><p>{e}</p></div>"
 
 @app.route("/report/<code>")
 def report_daily(code):
     try:
-        code_norm = normalize_code(code); logs = db_get_logs(code_norm, 200)
-        html = CSS + f"<h2>Daily Report {code_norm} - {date.today()}</h2><div class='card'><a href='/report/{code_norm}/weekly'>Weekly</a> | <a href='/admin/{code_norm}'>Admin</a><br><br><table border=1 cellpadding=8 style='width:100%;border-collapse:collapse'><tr><th>Time</th><th>Kid</th><th>Van</th><th>Action</th></tr>"
-        for lg in logs: html+=f"<tr><td>{lg.get('log_time','')}</td><td>{lg.get('kid_name','')}</td><td>{lg.get('van_plate','')}</td><td>{lg.get('action','')}</td></tr>"
-        html+="</table></div>"; return html
-    except Exception as e: return CSS + f"<p>{e}</p>"
+        code_norm = normalize_code(code); school = db_get_school(code_norm)
+        if not school: return CSS + "<div class='card'><h2>No school</h2></div>"
+        if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
+        kids = db_get_kids(code_norm)
+        total = len(kids); picked = sum(1 for k in kids if k and 'picked_home' in (k.get('times',{}) or {})); absent = sum(1 for k in kids if k and k.get('absent'))
+        html = CSS + f"<div class='no-print'><a href='/admin/{code_norm}'><button>⬅️ Admin</button></a> <a href='/report/{code_norm}/weekly'><button class='btn-blue'>📊 Weekly</button></a> <a href='/report/{code_norm}/csv'><button class='btn-orange'>📥 CSV Daily</button></a></div><div class='card'><h2>Daily Report - {school.get('name','')} - {date.today()} - {current_time_str()} - Only {code_norm}</h2><p>Total:{total} Picked:{picked} Absent:{absent}</p></div><div class='card'><table><tr><th>Kid</th><th>Van</th><th>Status</th><th>Parent</th></tr>"
+        for k in kids:
+            if not k: continue
+            html += f"<tr><td>{k.get('name','')}</td><td>{k.get('van_plate','')}</td><td>{k.get('status','')}</td><td>{k.get('parent_phone','')}</td></tr>"
+        html += "</table></div>"; return html
+    except Exception as e: return f"Daily error {e}"
 
 @app.route("/report/<code>/weekly")
-def report_weekly(code):
+def weekly_report(code):
     try:
-        code_norm = normalize_code(code); logs = db_get_logs(code_norm, 1000)
-        html = CSS + f"<h2>Weekly Report {code_norm}</h2><div class='card'><a href='/report/{code_norm}'>Daily</a> | <a href='/admin/{code_norm}'>Admin</a><br><br>"
-        html+="<table border=1 cellpadding=8 style='width:100%;border-collapse:collapse'><tr><th>Date</th><th>Kid</th><th>Action</th><th>Van</th></tr>"
-        for lg in logs: html+=f"<tr><td>{lg.get('log_date','')}</td><td>{lg.get('kid_name','')}</td><td>{lg.get('action','')}</td><td>{lg.get('van_plate','')}</td></tr>"
-        html+="</table></div>"; return html
-    except Exception as e: return CSS + f"<p>{e}</p>"
+        code_norm = normalize_code(code); school = db_get_school(code_norm)
+        if not school: return CSS + "<div class='card'><h2>No school</h2></div>"
+        if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
+        kids = db_get_kids(code_norm); total = len([k for k in kids if k]); absent_today = sum(1 for k in kids if k and k.get('absent')); not_picked = [k for k in kids if k and not (k.get('times',{}) or {}) and not k.get('absent')]; picked_home = sum(1 for k in kids if k and 'picked_home' in (k.get('times',{}) or {}))
+        html = CSS + f"""<meta name="viewport" content="width=device-width, initial-scale=1"><div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap"><a href="/admin/{code_norm}"><button>⬅️ Admin</button></a><a href="/report/{code_norm}"><button class="btn-grey">Daily</button></a><a href="/report/{code_norm}/weekly/csv"><button class="btn-blue">📥 Weekly CSV</button></a></div><h2>📊 {school.get('name','')} ({code_norm}) - {current_time_str()} - ARMOR + Unlimited</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px"><div class="card" style="text-align:center"><h3>{total}</h3><small>Total</small></div><div class="card" style="text-align:center"><h3>{picked_home}</h3><small>Picked</small></div><div class="card" style="text-align:center"><h3>{absent_today}</h3><small>Absent</small></div></div><div class="card"><b>Not yet picked ({len(not_picked)}):</b> {', '.join([k.get('name','') for k in not_picked]) or 'All picked ✅'}</div><div class="card"><h3>All Kids - Isolated to {code_norm}</h3><table><tr><th>Kid</th><th>Van</th><th>Status</th><th>Times</th></tr>"""
+        for kid in kids:
+            if not kid: continue
+            times = kid.get('times',{}) or {}; times_str = "<br>".join([f"<small>{k}: {v}</small>" for k,v in times.items()]) or "<small>Not started</small>"
+            html += f"<tr><td><b>{kid.get('name','')}</b></td><td>{kid.get('van_plate','')}</td><td>{'🚫 ABSENT' if kid.get('absent') else '✅'}<br><small>{(kid.get('status','') or '')[:30]}</small></td><td>{times_str}</td></tr>"
+        html += "</table></div>"
+        log = db_get_logs(code_norm, 200)
+        if log:
+            html += f"<div class='card'><h3>Recent Log - Only {code_norm}</h3><table><tr><th>Date</th><th>Kid</th><th>Van</th><th>Action</th><th>Time</th></tr>"
+            for e in log:
+                html += f"<tr><td>{e.get('log_date','')}</td><td>{e.get('kid_name','')}</td><td>{e.get('van_plate','')}</td><td>{e.get('action','')}</td><td><small>{e.get('log_time','')}</small></td></tr>"
+            html += "</table></div>"
+        return html
+    except Exception as e: return f"Weekly error {e}"
+
+@app.route("/report/<code>/csv")
+def export_csv_daily(code):
+    try:
+        code_norm = normalize_code(code); school = db_get_school(code_norm)
+        if not school: return "No school"
+        if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
+        kids = db_get_kids(code_norm)
+        si = io.StringIO(); cw = csv.writer(si); cw.writerow(["Kid ID","Name","Stage","Van","Parent Phone","Status","Absent","Picked Home","Dropped School","Picked School","Dropped Home","Report Time","School Code"])
+        for kid in kids:
+            if not kid: continue
+            t = kid.get('times',{}) or {}; cw.writerow([kid.get('id',''),kid.get('name',''),kid.get('stage',''),kid.get('van_plate',''),kid.get('parent_phone',''),kid.get('status',''),kid.get('absent',False),t.get('picked_home',''),t.get('dropped_school',''),t.get('picked_school',''),t.get('dropped_home',''),current_time_str(), code_norm])
+        output = make_response(si.getvalue()); output.headers["Content-Disposition"] = f"attachment; filename=FIKISHA_DAILY_{code_norm}_{date.today()}.csv"; output.headers["Content-type"] = "text/csv"; return output
+    except Exception as e: return f"CSV error {e}"
+
+@app.route("/report/<code>/weekly/csv")
+def export_csv_weekly(code):
+    try:
+        code_norm = normalize_code(code); school = db_get_school(code_norm)
+        if not school: return "No school"
+        if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
+        si = io.StringIO(); cw = csv.writer(si); cw.writerow(["Date","Time","Kid Name","Van","Action","School"])
+        for e in db_get_logs(code_norm, 500):
+            cw.writerow([e.get('log_date',''), e.get('log_time',''), e.get('kid_name',''), e.get('van_plate',''), e.get('action',''), code_norm])
+        cw.writerow([]); cw.writerow(["--- SNAPSHOT ---"]); cw.writerow(["Kid ID","Name","Stage","Van","Parent Phone","Status","Absent"])
+        for kid in db_get_kids(code_norm):
+            if not kid: continue
+            cw.writerow([kid.get('id',''),kid.get('name',''),kid.get('stage',''),kid.get('van_plate',''),kid.get('parent_phone',''),kid.get('status',''),kid.get('absent',False)])
+        output = make_response(si.getvalue()); output.headers["Content-Disposition"] = f"attachment; filename=FIKISHA_WEEKLY_{code_norm}_{date.today()}.csv"; output.headers["Content-type"] = "text/csv"; return output
+    except Exception as e: return f"CSV error {e}"
 
 @app.route("/manifest.json")
-def manifest():
-    return jsonify({"name":"FIKISHA","short_name":"FIKISHA","start_url":"/","display":"standalone","background_color":"#FFF8E1","theme_color":"#0D2A54","icons":[{"src":"https://via.placeholder.com/192","sizes":"192x192","type":"image/png"}]})
+def manifest(): return jsonify({"name": "FIKISHA Driver","short_name": "FIKISHA","start_url": "/","display": "standalone","background_color": "#FFF8E1","theme_color": "#0D2A54"})
 
 @app.route("/sw.js")
-def sw():
-    js="self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"
-    return Response(js, mimetype="application/javascript")
+def sw(): return Response("self.addEventListener('install', e=>{ self.skipWaiting(); }); self.addEventListener('activate', e=>{ self.clients.claim(); }); self.addEventListener('fetch', e=>{ e.respondWith(fetch(e.request).catch(()=> caches.match(e.request))); });", mimetype='application/javascript')
+
+@app.route("/health")
+def health():
+    try:
+        r=safe_get(f"{SUPABASE_URL}/rest/v1/schools?select=code", headers=h())
+        return jsonify({"ok": True, "schools": len(r.json()) if r and r.status_code==200 else 0, "mode": "armor-unlimited"})
+    except: return jsonify({"ok": True, "mode": "armor"})
+
+@app.route("/migrate_once")
+def migrate_once():
+    if request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return "Login at / as super admin first"
+    try:
+        r=safe_get(f"{SUPABASE_URL}/rest/v1/fikisha_store?id=eq.1&select=data", headers=h())
+        old = r.json()[0]['data'] if r and r.json() and r.json()[0].get('data') else {"schools":{}}
+    except: old={"schools":{}}
+    count=0
+    for code,s in (old.get("schools",{}) or {}).items():
+        if not s: continue
+        safe_post(f"{SUPABASE_URL}/rest/v1/schools", headers=hr(), json={"code": normalize_code(code), "name": s.get('name','School '+code), "director_phone": s.get('director_phone',''), "paid_until": s.get('paid_until','2026-12-31')})
+        for plate, van in (s.get('vans',{}) or {}).items():
+            if not van: continue
+            safe_post(f"{SUPABASE_URL}/rest/v1/vans", headers=hr(), json={"school_code": normalize_code(code), "plate": normalize_plate(plate), "driver_name": van.get('driver_name',''), "driver_phone": van.get('driver_phone','')})
+        for kid_id,kid in (s.get('kids',{}) or {}).items():
+            if not kid: continue
+            safe_post(f"{SUPABASE_URL}/rest/v1/kids", headers=hr(), json={"id": kid_id.upper(), "school_code": normalize_code(code), "name": kid.get('name'), "stage": kid.get('stage',''), "parent_phone": kid.get('parent_phone',''), "van_plate": normalize_plate(kid.get('van_plate')), "status": kid.get('status','At Home - waiting for van'), "times": kid.get('times',{}), "absent": kid.get('absent', False), "dropped_home_ts": kid.get('dropped_home_ts')})
+            count+=1
+    return f"Migrated {count} kids to armor unlimited."
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

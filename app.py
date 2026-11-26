@@ -633,25 +633,105 @@ def split_kids_by_type(code, kids, vans_list):
     boda_kids = [k for k in kids if k and k.get('van_plate') in boda_plates]
     return van_kids, boda_kids
 
+# ---------- NEW: Smart Reports helpers (only for reports) ----------
+def _parse_report_date(s, fallback):
+    try:
+        if s: return datetime.strptime(str(s)[:10], "%Y-%m-%d").date()
+    except: pass
+    return fallback
+
+def _db_get_logs_for_date(code, d):
+    code=normalize_code(code)
+    r=safe_get(f"{SUPABASE_URL}/rest/v1/attendance_log?school_code=eq.{quote(code)}&log_date=eq.{quote(str(d))}&select=*&order=created_at.asc&limit=1000", headers=h())
+    return r.json() if r and r.status_code==200 else []
+
+def _db_get_logs_range(code, start_d, end_d):
+    code=normalize_code(code)
+    r=safe_get(f"{SUPABASE_URL}/rest/v1/attendance_log?school_code=eq.{quote(code)}&log_date=gte.{quote(str(start_d))}&log_date=lte.{quote(str(end_d))}&select=*&order=log_date.asc,created_at.asc&limit=1000", headers=h())
+    return r.json() if r and r.status_code==200 else []
+
+def _clean_action(a):
+    return str(a or '').replace(' (mass)','').strip()
+
+def _report_date_bar(code_norm, selected, mode):
+    # mode = 'daily' or 'weekly'
+    if mode=='daily':
+        return f"""<div class='card'><form method='get' style='display:flex;gap:8px;flex-wrap:wrap;align-items:center'><b>📅 Pick Date:</b><input type='date' name='date' value='{selected}' required style='width:auto'><button>Show Report</button><a href='/report/{code_norm}'><button type='button' class='btn-grey'>Today</button></a></form></div>"""
+    return f"""<div class='card'><form method='get' style='display:flex;gap:8px;flex-wrap:wrap;align-items:center'><b>📅 From:</b><input type='date' name='start' value='{selected[0]}' required style='width:auto'><b>To:</b><input type='date' name='end' value='{selected[1]}' required style='width:auto'><button>Show Report</button><a href='/report/{code_norm}/weekly'><button type='button' class='btn-grey'>Last 7 Days</button></a></form><small>Tip: Pick any range - e.g. Mon to Fri, or a full month.</small></div>"""
+
 @app.route("/report/<code>")
 def report_daily(code):
     try:
         code_norm = normalize_code(code); school = db_get_school(code_norm)
         if not school: return CSS + "<div class='card'><h2>No school</h2></div>"
         if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
+        today = date.today()
+        sel = _parse_report_date(request.args.get('date',''), today)
+        is_today = (sel == today)
         kids = db_get_kids(code_norm); vans_list = db_get_vans(code_norm)
-        van_kids, boda_kids = split_kids_by_type(code_norm, kids, vans_list)
+        vmap = {v['plate']: (v.get('vehicle_type') or 'van') for v in vans_list}
+        kidmap = {k['id']: k for k in kids if k}
+        # ---- Build rows ----
+        rows = []  # each: kid, vehicle_type, status_text, times_dict, source
+        if is_today:
+            # Live snapshot - same as before, uses kids.times
+            for k in kids:
+                if not k: continue
+                rows.append({'kid': k, 'vtype': vmap.get(k.get('van_plate',''),'van'), 'status': k.get('status',''), 'times': k.get('times',{}) or {}, 'absent': bool(k.get('absent'))})
+        else:
+            # Past date - rebuild from attendance_log for that date
+            logs = _db_get_logs_for_date(code_norm, sel)
+            by_kid = {}
+            for e in logs:
+                kid_id = e.get('kid_id') or e.get('kid_name','')
+                if kid_id not in by_kid: by_kid[kid_id] = {'kid': kidmap.get(kid_id, {'id': kid_id, 'name': e.get('kid_name',''), 'stage': '', 'parent_phone': '', 'van_plate': e.get('van_plate','')}), 'times': {}, 'absent': False, 'last_action': ''}
+                act = _clean_action(e.get('action',''))
+                by_kid[kid_id]['last_action'] = act
+                if act == 'absent': by_kid[kid_id]['absent'] = True
+                elif act in ('picked_home','dropped_school','picked_school','dropped_home'):
+                    by_kid[kid_id]['times'][act] = e.get('log_time','')
+                # keep kid info fresh from kidmap if exists
+                if kid_id in kidmap: by_kid[kid_id]['kid'] = kidmap[kid_id]
+            # Kids with NO log that day = Not recorded / No trip
+            for k in kids:
+                if not k: continue
+                if k['id'] not in by_kid:
+                    by_kid[k['id']] = {'kid': k, 'times': {}, 'absent': False, 'last_action': 'no_log'}
+            for v in by_kid.values():
+                k = v['kid']
+                if v['last_action'] == 'no_log': status = '— No trip recorded that day'
+                elif v['absent']: status = '🚫 ABSENT'
+                elif 'dropped_home' in v['times']: status = '✅ Home Safe'
+                elif 'picked_school' in v['times']: status = '🚐 On way Home'
+                elif 'dropped_school' in v['times']: status = '🏫 At School'
+                elif 'picked_home' in v['times']: status = '🏠 Picked Home'
+                else: status = v['last_action']
+                rows.append({'kid': k, 'vtype': vmap.get(k.get('van_plate',''),'van'), 'status': status, 'times': v['times'], 'absent': v['absent']})
+            rows.sort(key=lambda x: (x['kid'].get('name','') or '').lower())
+        van_rows = [r for r in rows if r['vtype']=='van']
+        boda_rows = [r for r in rows if r['vtype']=='boda']
         def stats(lst):
-            total=len(lst); picked=sum(1 for k in lst if k and 'picked_home' in (k.get('times',{}) or {})); absent=sum(1 for k in lst if k and k.get('absent')); return total,picked,absent
-        vt,vp,va = stats(van_kids); bt,bp,ba = stats(boda_kids)
-        html = CSS + f"<div class='no-print'><a href='/admin/{code_norm}'><button>⬅️ Admin</button></a> <a href='/report/{code_norm}/weekly'><button class='btn-blue'>📊 Weekly</button></a> <a href='/report/{code_norm}/csv'><button class='btn-orange'>📥 CSV Daily</button></a></div><div class='card'><h2>Daily Report - {school.get('name','')} - {date.today()} - {current_time_str()} - Only {code_norm}</h2><p>🚐 Vans: Total:{vt} Picked:{vp} Absent:{va} &nbsp;|&nbsp; 🏍️ Bodas: Total:{bt} Picked:{bp} Absent:{ba}</p></div>"
-        html += "<div class='card'><h3>🚐 Vans</h3><table><tr><th>Kid</th><th>Van</th><th>Status</th><th>Parent</th></tr>"
-        for k in van_kids:
-            html += f"<tr><td>{k.get('name','')}</td><td>{k.get('van_plate','')}</td><td>{k.get('status','')}</td><td>{k.get('parent_phone','')}</td></tr>"
-        html += "</table></div><div class='card card-boda'><h3>🏍️ Bodas</h3><table><tr><th>Kid</th><th>Boda</th><th>Status</th><th>Parent</th></tr>"
-        for k in boda_kids:
-            html += f"<tr><td>{k.get('name','')}</td><td>{k.get('van_plate','')}</td><td>{k.get('status','')}</td><td>{k.get('parent_phone','')}</td></tr>"
-        html += "</table></div>"; return html
+            total=len(lst); picked=sum(1 for r in lst if 'picked_home' in r['times']); dropped_school=sum(1 for r in lst if 'dropped_school' in r['times']); dropped_home=sum(1 for r in lst if 'dropped_home' in r['times']); absent=sum(1 for r in lst if r['absent']); return total,picked,dropped_school,dropped_home,absent
+        vt,vp,vds,vdh,va = stats(van_rows); bt,bp,bds,bdh,ba = stats(boda_rows)
+        label = 'TODAY - Live' if is_today else f"PAST DATE - From Log ({sel})"
+        html = CSS + f"<meta name='viewport' content='width=device-width, initial-scale=1'><div class='no-print'><a href='/admin/{code_norm}'><button>⬅️ Admin</button></a> <a href='/report/{code_norm}/weekly'><button class='btn-blue'>📊 Weekly</button></a> <a href='/report/{code_norm}/csv'><button class='btn-orange'>📥 CSV Daily (Today)</button></a></div>"
+        html += _report_date_bar(code_norm, sel, 'daily')
+        html += f"<div class='card'><h2>Daily Report - {school.get('name','')} - {sel} - {label} - Only {code_norm}</h2><p>🚐 Vans: Total:{vt} Picked:{vp} Dropped School:{vds} Home Safe:{vdh} Absent:{va} &nbsp;|&nbsp; 🏍️ Bodas: Total:{bt} Picked:{bp} Dropped School:{bds} Home Safe:{bdh} Absent:{ba}</p>{'' if is_today else '<p style=\"color:#d32f2f\"><b>⚠️ This is a past date. It shows what was logged that day. Kids added later still appear if they have a log, others show as No trip.</b></p>'}</div>"
+        for title, lst, css in [("🚐 Vans", van_rows, ""), ("🏍️ Bodas", boda_rows, "card-boda")]:
+            html += f"<div class='card {css}'><h3>{title} - {sel}</h3><table><tr><th>Kid</th><th>Vehicle</th><th>Status</th><th>Picked</th><th>School</th><th>Home</th><th>Parent</th></tr>"
+            for r in lst:
+                k=r['kid']; t=r['times']
+                html += f"<tr><td><b>{k.get('name','')}</b><br><small>{k.get('stage','')}</small></td><td>{k.get('van_plate','')}</td><td>{r['status']}</td><td><small>{t.get('picked_home','—')}</small></td><td><small>{t.get('dropped_school','—')}</small></td><td><small>{t.get('dropped_home','—')}</small></td><td><small>{k.get('parent_phone','')}</small></td></tr>"
+            html += "</table></div>"
+        if not is_today:
+            logs = _db_get_logs_for_date(code_norm, sel)
+            if logs:
+                html += f"<div class='card'><h3>📋 Full Log - {sel} ({len(logs)} events)</h3><table><tr><th>Kid</th><th>Vehicle</th><th>Action</th><th>Time</th></tr>"
+                for e in logs: html += f"<tr><td>{e.get('kid_name','')}</td><td>{e.get('van_plate','')}</td><td>{e.get('action','')}</td><td><small>{e.get('log_time','')}</small></td></tr>"
+                html += "</table></div>"
+            else:
+                html += f"<div class='card'><h3>📋 No log found for {sel}</h3><p>Either no trips happened, or logs were cleared. Try another date.</p></div>"
+        return html
     except Exception as e:
         return f"Daily error {e}"
 
@@ -661,21 +741,65 @@ def weekly_report(code):
         code_norm = normalize_code(code); school = db_get_school(code_norm)
         if not school: return CSS + "<div class='card'><h2>No school</h2></div>"
         if request.cookies.get(f"admin_pin_{code_norm}")!= get_admin_pin(school) and request.cookies.get("super_auth")!= SUPER_ADMIN_PASSWORD: return redirect(f"/admin/{code_norm}")
+        today = date.today()
+        default_start = today - timedelta(days=6)
+        start_d = _parse_report_date(request.args.get('start',''), default_start)
+        end_d = _parse_report_date(request.args.get('end',''), today)
+        if end_d < start_d: start_d, end_d = end_d, start_d
+        if (end_d - start_d).days > 31: end_d = start_d + timedelta(days=31)
         kids = db_get_kids(code_norm); vans_list = db_get_vans(code_norm)
-        van_kids, boda_kids = split_kids_by_type(code_norm, kids, vans_list)
-        total = len([k for k in kids if k]); absent_today = sum(1 for k in kids if k and k.get('absent')); not_picked = [k for k in kids if k and not (k.get('times',{}) or {}) and not k.get('absent')]; picked_home = sum(1 for k in kids if k and 'picked_home' in (k.get('times',{}) or {}))
-        html = CSS + f"""<meta name="viewport" content="width=device-width, initial-scale=1"><div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap"><a href="/admin/{code_norm}"><button>⬅️ Admin</button></a><a href="/report/{code_norm}"><button class="btn-grey">Daily</button></a><a href="/report/{code_norm}/weekly/csv"><button class="btn-blue">📥 Weekly CSV</button></a></div><h2>📊 {school.get('name','')} ({code_norm}) - {current_time_str()}</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px"><div class="card" style="text-align:center"><h3>{total}</h3><small>Total</small></div><div class="card" style="text-align:center"><h3>{picked_home}</h3><small>Picked</small></div><div class="card" style="text-align:center"><h3>{absent_today}</h3><small>Absent</small></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div class="card" style="text-align:center"><h3>🚐 {len(van_kids)}</h3><small>Van Kids</small></div><div class="card card-boda" style="text-align:center"><h3>🏍️ {len(boda_kids)}</h3><small>Boda Kids</small></div></div><div class="card"><b>Not yet picked ({len(not_picked)}):</b> {', '.join([k.get('name','') for k in not_picked]) or 'All picked ✅'}</div>"""
-        for title, lst, css in [("🚐 Vans", van_kids, ""), ("🏍️ Bodas", boda_kids, "card-boda")]:
-            html += f"<div class='card {css}'><h3>{title} - Isolated to {code_norm}</h3><table><tr><th>Kid</th><th>Vehicle</th><th>Status</th><th>Times</th></tr>"
-            for kid in lst:
-                if not kid: continue
-                times = kid.get('times',{}) or {}; times_str = "<br>".join([f"<small>{k}: {v}</small>" for k,v in times.items()]) or "<small>Not started</small>"
-                html += f"<tr><td><b>{kid.get('name','')}</b></td><td>{kid.get('van_plate','')}</td><td>{'🚫 ABSENT' if kid.get('absent') else '✅'}<br><small>{(kid.get('status','') or '')[:30]}</small></td><td>{times_str}</td></tr>"
-            html += "</table></div>"
-        log = db_get_logs(code_norm, 200)
-        if log:
-            html += f"<div class='card'><h3>Recent Log - Only {code_norm}</h3><table><tr><th>Date</th><th>Kid</th><th>Vehicle</th><th>Action</th><th>Time</th></tr>"
-            for e in log: html += f"<tr><td>{e.get('log_date','')}</td><td>{e.get('kid_name','')}</td><td>{e.get('van_plate','')}</td><td>{e.get('action','')}</td><td><small>{e.get('log_time','')}</small></td></tr>"
+        vmap = {v['plate']: (v.get('vehicle_type') or 'van') for v in vans_list}
+        kidmap = {k['id']: k for k in kids if k}
+        logs = _db_get_logs_range(code_norm, start_d, end_d)
+        # Per-day breakdown
+        days = []
+        d = start_d
+        while d <= end_d:
+            days.append(d); d += timedelta(days=1)
+        per_day = {str(d): {'picked': set(), 'dropped_school': set(), 'dropped_home': set(), 'absent': set(), 'events': 0} for d in days}
+        per_kid = {}  # kid_id -> {picked, dropped_school, dropped_home, absent, days_present:set}
+        for e in logs:
+            ld = str(e.get('log_date',''))[:10]
+            if ld not in per_day: continue
+            kid_id = e.get('kid_id') or e.get('kid_name','')
+            act = _clean_action(e.get('action',''))
+            per_day[ld]['events'] += 1
+            if kid_id not in per_kid: per_kid[kid_id] = {'picked': 0, 'dropped_school': 0, 'dropped_home': 0, 'absent': 0, 'days': set()}
+            if act == 'picked_home': per_day[ld]['picked'].add(kid_id); per_kid[kid_id]['picked'] += 1; per_kid[kid_id]['days'].add(ld)
+            elif act == 'dropped_school': per_day[ld]['dropped_school'].add(kid_id); per_kid[kid_id]['dropped_school'] += 1
+            elif act == 'dropped_home': per_day[ld]['dropped_home'].add(kid_id); per_kid[kid_id]['dropped_home'] += 1
+            elif act == 'absent': per_day[ld]['absent'].add(kid_id); per_kid[kid_id]['absent'] += 1
+        # Today live snapshot for "not yet picked" - only if range includes today
+        not_picked = []
+        if end_d >= today >= start_d:
+            not_picked = [k for k in kids if k and not (k.get('times',{}) or {}) and not k.get('absent')]
+        total_kids = len([k for k in kids if k])
+        total_events = len(logs)
+        html = CSS + f"""<meta name="viewport" content="width=device-width, initial-scale=1"><div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap"><a href="/admin/{code_norm}"><button>⬅️ Admin</button></a><a href="/report/{code_norm}"><button class="btn-grey">Daily</button></a><a href="/report/{code_norm}/weekly/csv"><button class="btn-blue">📥 Weekly CSV (All Logs)</button></a></div>"""
+        html += _report_date_bar(code_norm, (start_d, end_d), 'weekly')
+        html += f"<h2>📊 {school.get('name','')} ({code_norm}) - {start_d} to {end_d}</h2><div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px'><div class='card' style='text-align:center'><h3>{total_kids}</h3><small>Total Kids (now)</small></div><div class='card' style='text-align:center'><h3>{total_events}</h3><small>Events in Range</small></div><div class='card' style='text-align:center'><h3>{len(days)}</h3><small>Days</small></div></div>"
+        if not_picked: html += f"<div class='card'><b>Not yet picked TODAY ({len(not_picked)}):</b> {', '.join([k.get('name','') for k in not_picked])}</div>"
+        # Day-by-day table
+        html += f"<div class='card'><h3>📅 Day by Day - {start_d} to {end_d}</h3><table><tr><th>Date</th><th>Picked</th><th>At School</th><th>Home Safe</th><th>Absent</th><th>Events</th><th></th></tr>"
+        for d in days:
+            pd = per_day[str(d)]
+            weekday = d.strftime('%a')
+            html += f"<tr><td><b>{d}</b><br><small>{weekday}</small></td><td>{len(pd['picked'])}</td><td>{len(pd['dropped_school'])}</td><td>{len(pd['dropped_home'])}</td><td>{len(pd['absent'])}</td><td>{pd['events']}</td><td><a href='/report/{code_norm}?date={d}'>View Day →</a></td></tr>"
+        html += "</table></div>"
+        # Per-kid summary
+        html += f"<div class='card'><h3>👦 Per Kid Summary in Range</h3><table><tr><th>Kid</th><th>Vehicle</th><th>Days Picked</th><th>Home Safe</th><th>Absent Days</th></tr>"
+        # Sort: most picked first, then name
+        sorted_kids = sorted(per_kid.items(), key=lambda kv: (-kv[1]['picked'], str(kidmap.get(kv[0], {'name': kv[0]}).get('name',''))))
+        for kid_id, s in sorted_kids:
+            k = kidmap.get(kid_id, {'name': kid_id, 'van_plate': '', 'stage': ''})
+            vtype = vmap.get(k.get('van_plate',''),'van'); emoji = '🏍️' if vtype=='boda' else '🚐'
+            html += f"<tr><td><b>{k.get('name','')}</b><br><small>{k.get('stage','')}</small></td><td>{emoji} {k.get('van_plate','')}</td><td>{s['picked']}</td><td>{s['dropped_home']}</td><td>{s['absent']}</td></tr>"
+        if not sorted_kids: html += "<tr><td colspan='5'>No logs in this range. Try a different date range.</td></tr>"
+        html += "</table><small>Kids with no log in this range are not listed - they had no trips recorded.</small></div>"
+        # Recent log
+        if logs:
+            html += f"<div class='card'><h3>Recent Log - Only {code_norm} ({start_d} to {end_d})</h3><table><tr><th>Date</th><th>Kid</th><th>Vehicle</th><th>Action</th><th>Time</th></tr>"
+            for e in reversed(logs[-200:]): html += f"<tr><td>{e.get('log_date','')}</td><td>{e.get('kid_name','')}</td><td>{e.get('van_plate','')}</td><td>{e.get('action','')}</td><td><small>{e.get('log_time','')}</small></td></tr>"
             html += "</table></div>"
         return html
     except Exception as e:
